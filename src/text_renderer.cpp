@@ -1,5 +1,4 @@
 #include "text_renderer.h"
-
 #include <vector>
 #include <stdexcept>
 #include <cstring>
@@ -36,7 +35,6 @@ void main() {
 )";
 }
 
-// UTF-8 -> UTF-32 简易转换（容错处理：遇到非法字节用 U+FFFD）
 static std::u32string Utf8ToUtf32Impl(const std::string& s) {
     std::u32string out;
     size_t i = 0, n = s.size();
@@ -63,7 +61,6 @@ static std::u32string Utf8ToUtf32Impl(const std::string& s) {
             out.push_back(cp);
             i += 4;
         } else {
-            // 非法序列
             out.push_back(0xFFFD);
             ++i;
         }
@@ -74,16 +71,13 @@ static std::u32string Utf8ToUtf32Impl(const std::string& s) {
 TextRenderer::TextRenderer() = default;
 
 TextRenderer::~TextRenderer() {
-    // 释放GL纹理
     for (auto& kv : glyphCache_) {
         if (kv.second.textureId) {
             glDeleteTextures(1, &kv.second.textureId);
         }
     }
-    // GL对象
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (vao_) glDeleteVertexArrays(1, &vao_);
-    // FreeType
     if (face_) { FT_Done_Face(face_); face_ = nullptr; }
     if (ft_)   { FT_Done_FreeType(ft_); ft_ = nullptr; }
 }
@@ -92,19 +86,16 @@ bool TextRenderer::Init(int screenWidth, int screenHeight) {
     screenW_ = screenWidth;
     screenH_ = screenHeight;
 
-    // 初始化FreeType
     if (FT_Init_FreeType(&ft_) != 0) {
-        std::cerr << "FreeType 初始化失败" << std::endl;
+        std::cerr << "FreeType init failed" << std::endl;
         return false;
     }
     ftReady_ = true;
 
-    // GL 资源
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    // 每顶点4个float: x, y, u, v；每个字形6个顶点
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 6 * 4, nullptr, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
@@ -129,7 +120,6 @@ bool TextRenderer::LoadFont(const std::string& fontPath, int pixelHeight) {
     FT_Set_Pixel_Sizes(face_, 0, pixelHeight);
     fontPixelHeight_ = pixelHeight;
 
-    // 设置像素对齐
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glyphCache_.clear();
     return true;
@@ -149,7 +139,6 @@ void TextRenderer::RenderText(const std::string& utf8Text, float x, float y, flo
 
     glBindVertexArray(vao_);
 
-    // 混合启用（叠加到背景）
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -167,7 +156,6 @@ void TextRenderer::RenderText(const std::string& utf8Text, float x, float y, flo
         float w = static_cast<float>(ch.sizeX) * scale;
         float h = static_cast<float>(ch.sizeY) * scale;
 
-        // 6个顶点（两个三角形），每顶点: x,y,u,v
         float vertices[6][4] = {
             { xpos,     ypos + h, 0.0f, 0.0f },
             { xpos,     ypos,     0.0f, 1.0f },
@@ -186,7 +174,7 @@ void TextRenderer::RenderText(const std::string& utf8Text, float x, float y, flo
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
-        penX += static_cast<float>(ch.advance >> 6) * scale; // 1/64像素 -> 像素
+        penX += static_cast<float>(ch.advance >> 6) * scale;
     }
 
     glBindVertexArray(0);
@@ -211,7 +199,6 @@ float TextRenderer::GetLineHeightPx(float scale) const {
             return static_cast<float>(h26_6 / 64.0) * scale;
         }
     }
-    // Fallback: 1.2x font pixel height
     return static_cast<float>(fontPixelHeight_ > 0 ? fontPixelHeight_ * 1.2 : 24.0 * 1.2) * scale;
 }
 
@@ -225,7 +212,6 @@ float TextRenderer::MeasureTextWidth(const std::string& utf8Text, float scale) {
     }
     for (char32_t cp : text32) {
         if (!EnsureGlyphCached(cp)) {
-            // approximate width for missing glyph
             widthPx += (fontPixelHeight_ > 0 ? fontPixelHeight_ * 0.5f : 10.0f);
             continue;
         }
@@ -237,7 +223,7 @@ float TextRenderer::MeasureTextWidth(const std::string& utf8Text, float scale) {
 
 float TextRenderer::GetAscenderPx(float scale) const {
     if (face_ && face_->size) {
-        const long a26_6 = face_->size->metrics.ascender; // can be negative? ascender is usually positive
+        const long a26_6 = face_->size->metrics.ascender;
         return static_cast<float>(a26_6 / 64.0) * scale;
     }
     return static_cast<float>(fontPixelHeight_ > 0 ? fontPixelHeight_ * 0.8 : 19.0) * scale;
@@ -245,7 +231,7 @@ float TextRenderer::GetAscenderPx(float scale) const {
 
 float TextRenderer::GetDescenderPx(float scale) const {
     if (face_ && face_->size) {
-        const long d26_6 = face_->size->metrics.descender; // typically negative
+        const long d26_6 = face_->size->metrics.descender;
         float d = static_cast<float>(std::abs(d26_6) / 64.0);
         return d * scale;
     }
@@ -258,7 +244,6 @@ bool TextRenderer::EnsureGlyphCached(char32_t codepoint) {
 
     FT_UInt glyph_index = FT_Get_Char_Index(face_, codepoint);
     if (FT_Load_Char(face_, codepoint, FT_LOAD_RENDER)) {
-        // 加载失败：回退到方框（U+25A1）或空格
         if (codepoint != U'\u25A1' && EnsureGlyphCached(U'\u25A1')) {
             glyphCache_[codepoint] = glyphCache_[U'\u25A1'];
             return true;
@@ -271,7 +256,6 @@ bool TextRenderer::EnsureGlyphCached(char32_t codepoint) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    // 单通道纹理
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED,
                  g->bitmap.width, g->bitmap.rows,
                  0, GL_RED, GL_UNSIGNED_BYTE, g->bitmap.buffer);

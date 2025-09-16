@@ -77,13 +77,13 @@ endif()
 set(SOURCES
     src/main.cpp
     src/shader.cpp
-    src/monitor_test.cpp
+    src/display_hardware_test.cpp
     src/text_renderer.cpp
 )
 
 set(HEADERS
     src/include/shader.h
-    src/include/monitor_test.h
+    src/include/display_hardware_test.h
     src/include/text_renderer.h
 )
 
@@ -173,6 +173,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_link_libraries(display_hardware_test png16 z bz2 brotlidec brotlicommon harfbuzz)
     # Win32 必需系统库（GLFW/GLEW/OpenGL 使用）
     target_link_libraries(display_hardware_test user32 gdi32 shell32 advapi32 ole32 comdlg32 winmm)
+    target_sources(display_hardware_test PRIVATE res/app.rc)
+    target_link_options(display_hardware_test PRIVATE -Wl,--dynamicbase -Wl,--nxcompat)
 endif()
 
 # Windows特定设置

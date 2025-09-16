@@ -30,6 +30,7 @@ echo "=== 显示器压力测试工具 - 发布构建(增强版) ==="
 echo
 
 # 0. 预备输出目录
+rm -rf "$ROOT_DIR/dist"
 mkdir -p "$ROOT_DIR/dist/linux-x64"
 mkdir -p "$ROOT_DIR/dist/windows-x64"
 
@@ -95,9 +96,6 @@ set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-
-# 尽量静态链接标准库（其余依赖使用 dll）
-set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
 EOF
 
   WIN_BUILD_DIR="$ROOT_DIR/build-windows"
@@ -182,22 +180,39 @@ VERSION="$(date +"%Y%m%d")"
   echo "Build Date: $(date)"
 } > version.txt
 
-# Linux 包
+PROJECT_DIR_NAME="display_hardware_test"
+
+# Linux 包（归档内目录名为项目名）
 if [ -f "linux-x64/display_hardware_test" ]; then
   echo "打包 Linux 版本..."
-  tar -czf "display_hardware_test_linux-x64_v${VERSION}.tar.gz" linux-x64/
-  echo "Linux 发布包: display_hardware_test_linux-x64_v${VERSION}.tar.gz"
+  STAGE_DIR=".stage_linux"
+  rm -rf "$STAGE_DIR"
+  mkdir -p "$STAGE_DIR/$PROJECT_DIR_NAME"
+  cp -f "linux-x64/display_hardware_test" "$STAGE_DIR/$PROJECT_DIR_NAME/"
+  cp -f ../README.md "$STAGE_DIR/$PROJECT_DIR_NAME/" 2>/dev/null || true
+  cp -f ../README_zh.md "$STAGE_DIR/$PROJECT_DIR_NAME/" 2>/dev/null || true
+  tar -czf "${PROJECT_DIR_NAME}_linux-x64_v${VERSION}.tar.gz" -C "$STAGE_DIR" "$PROJECT_DIR_NAME"
+  rm -rf "$STAGE_DIR"
+  echo "Linux 发布包: ${PROJECT_DIR_NAME}_linux-x64_v${VERSION}.tar.gz"
 fi
 
-# Windows 包
+# Windows 包（归档内目录名为项目名）
 if [ -f "windows-x64/display_hardware_test.exe" ]; then
   echo "打包 Windows 版本..."
+  STAGE_DIR=".stage_windows"
+  rm -rf "$STAGE_DIR"
+  mkdir -p "$STAGE_DIR/$PROJECT_DIR_NAME"
+  cp -f "windows-x64/display_hardware_test.exe" "$STAGE_DIR/$PROJECT_DIR_NAME/"
+  cp -n "windows-x64/"*.dll "$STAGE_DIR/$PROJECT_DIR_NAME/" 2>/dev/null || true
+  cp -f ../README.md "$STAGE_DIR/$PROJECT_DIR_NAME/" 2>/dev/null || true
+  cp -f ../README_zh.md "$STAGE_DIR/$PROJECT_DIR_NAME/" 2>/dev/null || true
   if command -v zip >/dev/null 2>&1; then
-    zip -r "display_hardware_test_windows-x64_v${VERSION}.zip" windows-x64/
+    (cd "$STAGE_DIR" && zip -r "../${PROJECT_DIR_NAME}_windows-x64_v${VERSION}.zip" "$PROJECT_DIR_NAME" )
   else
     echo "警告: 未安装 zip，跳过 Windows 压缩包创建"
   fi
-  echo "Windows 发布包: display_hardware_test_windows-x64_v${VERSION}.zip"
+  rm -rf "$STAGE_DIR"
+  echo "Windows 发布包: ${PROJECT_DIR_NAME}_windows-x64_v${VERSION}.zip"
 fi
 
 cd "$ROOT_DIR"

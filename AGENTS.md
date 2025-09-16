@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Core sources in `src/`: `main.cpp`, `monitor_test.*` (render loop + input), `shader.*` (GLSL wrapper), `text_renderer.*` (FreeType overlay).
+- Core sources in `src/`: `main.cpp`, `display_hardware_test.*` (render loop + input), `shader.*` (GLSL wrapper), `text_renderer.*` (FreeType overlay).
 - Public headers in `src/include/`.
 - Assets: `assets/fonts/` bundled fonts used by the overlay.
 - Tooling: `CMakeLists.txt`, `cmake/windows-cross.cmake`, `build_release.sh`.
@@ -15,7 +15,7 @@
 
 ## Coding Style & Naming Conventions
 - Language: C++20. Indentation: 4 spaces. Braces on same line. Warnings enabled (`-Wall -Wextra -pedantic`).
-- Filenames: `snake_case.*` (e.g., `monitor_test.cpp`). Types: `PascalCase` (e.g., `MonitorTest`). Functions/vars: `camelCase`. Macros/constants: `UPPER_CASE`.
+- Filenames: `snake_case.*` (e.g., `display_hardware_test.cpp`). Types: `PascalCase` (e.g., `MonitorTest`). Functions/vars: `camelCase`. Macros/constants: `UPPER_CASE`.
 - Prefer RAII and smart pointers (`std::unique_ptr`), `const`-correctness, no raw `new/delete`.
 - Run formatting before PR: `clang-format -i src/*.cpp src/include/*.h`.
 

@@ -1,4 +1,4 @@
-#include "monitor_test.h"
+#include "display_hardware_test.h"
 #include "shader.h"
 #include "text_renderer.h"
 
@@ -528,6 +528,7 @@ MonitorTest::MonitorTest()
     lastFrameTime = startTime;
     lastFpsReportTime = startTime;
     lastLoopTime = startTime;
+    language = detectLanguage();
 }
 
 MonitorTest::~MonitorTest() {
@@ -538,7 +539,7 @@ bool MonitorTest::initialize() {
     glfwSetErrorCallback(errorCallback);
     
     if (!glfwInit()) {
-        std::cerr << "初始化GLFW失败" << std::endl;
+        std::cerr << tr("初始化GLFW失败", "Failed to initialize GLFW") << std::endl;
         return false;
     }
     
@@ -575,14 +576,14 @@ bool MonitorTest::initializeWindow() {
     windowWidth = mode->width;
     windowHeight = mode->height;
     
-    std::cout << "检测到显示器分辨率: " << windowWidth << "x" << windowHeight 
-              << " @" << mode->refreshRate << "Hz" << std::endl;
+    std::cout << tr("检测到显示器分辨率: ", "Detected resolution: ")
+              << windowWidth << "x" << windowHeight << " @" << mode->refreshRate << "Hz" << std::endl;
     
     // 创建全屏窗口
     window = glfwCreateWindow(windowWidth, windowHeight, "Display Hardware Test", monitor, nullptr);
     
     if (!window) {
-        std::cerr << "创建GLFW窗口失败" << std::endl;
+        std::cerr << tr("创建GLFW窗口失败", "Failed to create GLFW window") << std::endl;
         glfwTerminate();
         return false;
     }
@@ -603,7 +604,7 @@ bool MonitorTest::initializeWindow() {
 bool MonitorTest::initializeOpenGL() {
     // 初始化GLEW
     if (glewInit() != GLEW_OK) {
-        std::cerr << "初始化GLEW失败" << std::endl;
+        std::cerr << tr("初始化GLEW失败", "Failed to initialize GLEW") << std::endl;
         return false;
     }
     
@@ -666,23 +667,25 @@ void MonitorTest::setupShaders() {
     // 文本渲染器（FreeType）
     textRenderer = std::make_unique<TextRenderer>();
     if (!textRenderer->Init(windowWidth, windowHeight)) {
-        std::cerr << "文本渲染初始化失败（FreeType）" << std::endl;
+        std::cerr << tr("文本渲染初始化失败（FreeType）", "Text renderer init failed (FreeType)") << std::endl;
     } else {
         std::string fontPath = chooseFontPath();
         if (fontPath.empty()) {
-            std::cerr << "未找到可用中文字体。请安装 Noto Sans CJK、思源黑体或文泉驿字体。" << std::endl;
+            std::cerr << tr("未找到可用字体，请安装常见 CJK 或西文字体。",
+                           "No suitable system font found; please install common CJK or Western fonts.")
+                      << std::endl;
         } else {
             if (!textRenderer->LoadFont(fontPath, 24)) {
-                std::cerr << "加载字体失败: " << fontPath << std::endl;
+                std::cerr << tr("加载字体失败: ", "Failed to load font: ") << fontPath << std::endl;
             } else {
-                std::cout << "已加载字体: " << fontPath << std::endl;
+                std::cout << tr("已加载字体: ", "Loaded font: ") << fontPath << std::endl;
             }
         }
     }
 }
 
 static std::string toSafeString(const GLubyte* s) {
-    return s ? reinterpret_cast<const char*>(s) : std::string("未知");
+    return s ? reinterpret_cast<const char*>(s) : std::string("Unknown");
 }
 
 void MonitorTest::renderStatusOverlay() {
@@ -713,83 +716,102 @@ void MonitorTest::renderStatusOverlay() {
     struct Line { std::string txt; float r, g, b; bool extraGap; };
     std::vector<Line> leftLines;
     // 配色：标题高对比、正文近白
-    const float tr = 0.92f, tg = 0.94f, tb = 0.96f; // 正文
-    leftLines.push_back({"GPU 信息", 0.30f, 0.95f, 0.50f, false});
-    std::string glVersion = std::string("OpenGL 版本: ") + toSafeString(glGetString(GL_VERSION));
-    std::string glVendor  = std::string("显卡厂商: ") + toSafeString(glGetString(GL_VENDOR));
-    std::string glRend    = std::string("显卡型号: ") + toSafeString(glGetString(GL_RENDERER));
-    std::string res       = "分辨率: " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight);
-    leftLines.push_back({glVersion, tr, tg, tb, false});
-    leftLines.push_back({glVendor,  tr, tg, tb, false});
-    leftLines.push_back({glRend,    tr, tg, tb, false});
-    leftLines.push_back({res,       tr, tg, tb, true}); // 额外间距
+    const float cr = 0.92f, cg = 0.94f, cb = 0.96f; // 正文颜色
+    leftLines.push_back({tr("GPU 信息", "GPU Info"), 0.30f, 0.95f, 0.50f, false});
+    std::string glVersion = std::string(tr("OpenGL 版本: ", "OpenGL: ")) + toSafeString(glGetString(GL_VERSION));
+    std::string glVendor  = std::string(tr("显卡厂商: ", "Vendor: ")) + toSafeString(glGetString(GL_VENDOR));
+    std::string glRend    = std::string(tr("显卡型号: ", "Renderer: ")) + toSafeString(glGetString(GL_RENDERER));
+    std::string res       = std::string(tr("分辨率: ", "Resolution: ")) + std::to_string(windowWidth) + "x" + std::to_string(windowHeight);
+    leftLines.push_back({glVersion, cr, cg, cb, false});
+    leftLines.push_back({glVendor,  cr, cg, cb, false});
+    leftLines.push_back({glRend,    cr, cg, cb, false});
+    leftLines.push_back({res,       cr, cg, cb, true}); // 额外间距
 
-    leftLines.push_back({"显示器信息", 0.40f, 0.80f, 1.00f, false});
+    leftLines.push_back({tr("显示器信息", "Monitor"), 0.40f, 0.80f, 1.00f, false});
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-    std::string refresh = mode ? ("刷新率: " + std::to_string(mode->refreshRate) + " Hz") : "刷新率: 未知";
-    leftLines.push_back({refresh, tr, tg, tb, true});
+    std::string refresh = mode ? (std::string(tr("刷新率: ", "Refresh: ")) + std::to_string(mode->refreshRate) + " Hz")
+                               : std::string(tr("刷新率: 未知", "Refresh: Unknown"));
+    leftLines.push_back({refresh, cr, cg, cb, true});
 
-    leftLines.push_back({"实时测试信息", 1.00f, 0.75f, 0.30f, false});
+    leftLines.push_back({tr("实时测试信息", "Runtime"), 1.00f, 0.75f, 0.30f, false});
     std::string modeStr;
     switch (config.mode) {
-        case TestMode::FIXED_FPS:       modeStr = "固定帧率"; break;
-        case TestMode::JITTER_FPS:      modeStr = "抖动模式"; break;
-        case TestMode::OSCILLATION_FPS: modeStr = "震荡模式"; break;
+        case TestMode::FIXED_FPS:       modeStr = tr("固定帧率", "Fixed FPS"); break;
+        case TestMode::JITTER_FPS:      modeStr = tr("抖动模式", "Jitter FPS"); break;
+        case TestMode::OSCILLATION_FPS: modeStr = tr("震荡模式", "Oscillation FPS"); break;
     }
     std::ostringstream oss;
     oss << "FPS: " << static_cast<int>(currentFps);
     float ratio = static_cast<float>(std::min(currentFps / 120.0, 1.0));
     leftLines.push_back({oss.str(), 1.0f - ratio, ratio, 0.2f, false});
     std::ostringstream ft;
-    ft << std::fixed << std::setprecision(2) << "帧时间: " << frameTimeMs << " ms  (目标: " << (targetFrameTime * 1000.0) << " ms)";
-    leftLines.push_back({ft.str(), tr, tg, tb, false});
-    leftLines.push_back({"帧率模式: " + modeStr, tr, tg, tb, false});
-    std::string groupStr = (config.category == Category::STATIC_GROUP) ? "静态图样" : "动态压力";
+    ft << std::fixed << std::setprecision(2)
+       << (language == Language::ZH ? "帧时间: " : "Frame time: ")
+       << frameTimeMs << (language == Language::ZH ? " ms  (目标: " : " ms  (Target: ")
+       << (targetFrameTime * 1000.0) << " ms)";
+    leftLines.push_back({ft.str(), cr, cg, cb, false});
+    leftLines.push_back({std::string(tr("帧率模式: ", "Mode: ")) + modeStr, cr, cg, cb, false});
+    std::string groupStr = (config.category == Category::STATIC_GROUP) ? tr("静态图样", "Static") : tr("动态压力", "Dynamic");
     auto staticName = [&](int idx)->std::string {
         switch (idx) {
-            case 0: return "彩条"; case 1: return "灰阶渐变"; case 2: return "16阶灰条";
-            case 3: return "细棋盘(1px)"; case 4: return "粗棋盘"; case 5: return "网格32px";
-            case 6: return "网格8px"; case 7: return "RGB竖条"; case 8: return "十字+三分线";
-            case 9: return "纯黑"; case 10: return "纯白"; case 11: return "纯红";
-            case 12: return "纯绿"; case 13: return "纯蓝"; case 14: return "50%灰";
-            case 15: return "Siemens Star"; case 16: return "水平楔形"; case 17: return "垂直楔形";
-            case 18: return "同心圆环"; case 19: return "点栅格"; case 20: return "Gamma Checker";
+            case 0: return language==Language::ZH? "彩条" : "Color Bars";
+            case 1: return language==Language::ZH? "灰阶渐变" : "Gray Gradient";
+            case 2: return language==Language::ZH? "16阶灰条" : "16-step Gray";
+            case 3: return language==Language::ZH? "细棋盘(1px)" : "Fine Checker (1px)";
+            case 4: return language==Language::ZH? "粗棋盘" : "Coarse Checker";
+            case 5: return language==Language::ZH? "网格32px" : "Grid 32px";
+            case 6: return language==Language::ZH? "网格8px" : "Grid 8px";
+            case 7: return language==Language::ZH? "RGB竖条" : "RGB Stripes";
+            case 8: return language==Language::ZH? "十字+三分线" : "Cross + Thirds";
+            case 9: return language==Language::ZH? "纯黑" : "Black";
+            case 10: return language==Language::ZH? "纯白" : "White";
+            case 11: return language==Language::ZH? "纯红" : "Red";
+            case 12: return language==Language::ZH? "纯绿" : "Green";
+            case 13: return language==Language::ZH? "纯蓝" : "Blue";
+            case 14: return language==Language::ZH? "50%灰" : "50% Gray";
+            case 15: return "Siemens Star";
+            case 16: return language==Language::ZH? "水平楔形" : "Horizontal Wedge";
+            case 17: return language==Language::ZH? "垂直楔形" : "Vertical Wedge";
+            case 18: return language==Language::ZH? "同心圆环" : "Concentric Rings";
+            case 19: return language==Language::ZH? "点栅格" : "Dot Grid";
+            case 20: return "Gamma Checker";
         }
-        return "静态图样";
+        return language==Language::ZH? "静态图样" : "Static";
     };
     auto dynamicName = [&](int idx)->std::string {
         switch (idx) {
-            case 0: return "动态: 渐变+噪声"; case 1: return "动态: 高频噪声";
-            case 2: return "动态: 波浪干涉"; case 3: return "动态: 螺旋";
-            case 4: return "动态: 棋盘扰动"; case 5: return "动态: 辐射彩虹";
-            case 6: return "动态: 斜向干涉";
-            case 7: return "动态: RGBW轮播"; case 8: return "动态: 移动亮条";
-            case 9: return "动态: UFO移动"; case 10: return "动态: 1px反相闪烁";
-            case 11: return "动态: Zone Plate"; case 12: return "动态: 位平面闪烁";
-            case 13: return "动态: 彩色棋盘轮换"; case 14: return "动态: 蓝噪声滚动";
-            case 15: return "动态: 径向相位扫频"; case 16: return "动态: 旋转楔形线";
+            case 0: return language==Language::ZH? "动态: 渐变+噪声" : "Dyn: Gradient+Noise";
+            case 1: return language==Language::ZH? "动态: 高频噪声" : "Dyn: High-Freq Noise";
+            case 2: return language==Language::ZH? "动态: 波浪干涉" : "Dyn: Wave Interference";
+            case 3: return language==Language::ZH? "动态: 螺旋" : "Dyn: Spiral";
+            case 4: return language==Language::ZH? "动态: 棋盘扰动" : "Dyn: Checker Disturb";
+            case 5: return language==Language::ZH? "动态: 辐射彩虹" : "Dyn: Radial Rainbow";
+            case 6: return language==Language::ZH? "动态: 斜向干涉" : "Dyn: Diagonal Interf";
+            case 7: return language==Language::ZH? "动态: RGBW轮播" : "Dyn: RGBW Cycle";
+            case 8: return language==Language::ZH? "动态: 移动亮条" : "Dyn: Moving Bar";
+            case 9: return language==Language::ZH? "动态: UFO移动" : "Dyn: UFO Motion";
+            case 10: return language==Language::ZH? "动态: 1px反相闪烁" : "Dyn: 1px Temporal Flip";
+            case 11: return language==Language::ZH? "动态: Zone Plate" : "Dyn: Zone Plate";
+            case 12: return language==Language::ZH? "动态: 位平面闪烁" : "Dyn: Bit-Plane Flicker";
+            case 13: return language==Language::ZH? "动态: 彩色棋盘轮换" : "Dyn: Color Checker Cycle";
+            case 14: return language==Language::ZH? "动态: 蓝噪声滚动" : "Dyn: Blue-Noise Scroll";
+            case 15: return language==Language::ZH? "动态: 径向相位扫频" : "Dyn: Radial Phase Sweep";
+            case 16: return language==Language::ZH? "动态: 旋转楔形线" : "Dyn: Wedge Spin";
         }
-        return "动态图样";
+        return language==Language::ZH? "动态图样" : "Dynamic";
     };
     std::string patStr = (config.category == Category::STATIC_GROUP)
         ? staticName(config.staticMode)
         : dynamicName(config.dynamicMode);
-    leftLines.push_back({"模式组: " + groupStr, tr, tg, tb, false});
-    leftLines.push_back({"图样: " + patStr, tr, tg, tb, false});
+    leftLines.push_back({std::string(tr("模式组: ", "Group: ")) + groupStr, cr, cg, cb, false});
+    leftLines.push_back({std::string(tr("图样: ", "Pattern: ")) + patStr, cr, cg, cb, false});
     // 垂直同步状态
-    leftLines.push_back({std::string("垂直同步: ") + (config.vsyncEnabled ? "开" : "关"), tr, tg, tb, false});
-    // 自动轮播/日志状态
-    {
-        std::ostringstream as;
-        as << "自动轮播: " << (autoplayEnabled ? "开 (" + std::to_string(autoplayIntervalSec) + "s)" : "关");
-        leftLines.push_back({as.str(), tr, tg, tb, false});
-    }
-    leftLines.push_back({std::string("日志记录: ") + (loggingEnabled ? "开" : "关"), tr, tg, tb, false});
-    leftLines.push_back({"目标帧率: " + std::to_string(config.targetFps), tr, tg, tb, false});
-    leftLines.push_back({"范围: " + std::to_string(config.minFps) + "~" + std::to_string(config.maxFps), tr, tg, tb, config.isPaused});
+    leftLines.push_back({std::string(tr("垂直同步: ", "VSync: ")) + onOff(config.vsyncEnabled), cr, cg, cb, false});
+    leftLines.push_back({std::string(tr("目标帧率: ", "Target FPS: ")) + std::to_string(config.targetFps), cr, cg, cb, false});
+    leftLines.push_back({std::string(tr("范围: ", "Range: ")) + std::to_string(config.minFps) + "~" + std::to_string(config.maxFps), cr, cg, cb, config.isPaused});
     if (config.isPaused) {
-        leftLines.push_back({"状态: 已暂停", 1.0f, 0.2f, 0.2f, false});
+        leftLines.push_back({tr("状态: 已暂停", "Status: Paused"), 1.0f, 0.2f, 0.2f, false});
     }
 
     float leftMaxW = 0.0f; float leftTotalH = 0.0f; float leftGaps = 0.0f;
@@ -807,17 +829,16 @@ void MonitorTest::renderStatusOverlay() {
 
     // 右侧控制说明
     std::vector<std::string> rightTexts;
-    rightTexts.push_back("控制说明");
-    rightTexts.push_back("ESC   - 退出程序");
-    rightTexts.push_back("P     - 暂停/继续");
-    rightTexts.push_back("SPACE - 切换模式组");
-    rightTexts.push_back("←/→   - 上一/下一图样");
-    rightTexts.push_back("V     - 垂直同步 开/关");
-    rightTexts.push_back("A     - 自动轮播 开/关");
-    rightTexts.push_back("[/]   - 轮播间隔 -/+ 1s");
-    rightTexts.push_back("K     - 截图保存 (PPM)");
-    rightTexts.push_back("T     - 日志 开/关");
-    rightTexts.push_back("V     - 垂直同步 开/关");
+    rightTexts.push_back(tr("控制说明", "Controls"));
+    rightTexts.push_back(tr("ESC   - 退出程序", "ESC   - Exit"));
+#ifndef _WIN32
+    rightTexts.push_back(tr("P     - 暂停/继续", "P     - Pause/Resume"));
+    rightTexts.push_back(tr("V     - 垂直同步 开/关", "V     - VSync On/Off"));
+    rightTexts.push_back(tr("K     - 截图保存 (PPM)", "K     - Save screenshot (PPM)"));
+    rightTexts.push_back("L     - Toggle language (ZH/EN)");
+#endif
+    rightTexts.push_back(tr("SPACE - 切换模式组", "SPACE - Toggle group"));
+    rightTexts.push_back(tr("←/→   - 上一/下一图样", "←/→   - Prev/Next pattern"));
     float rightMaxW = 0.0f; float rightTotalH = 0.0f;
     for (const auto& s : rightTexts) {
         float w = textRenderer ? textRenderer->MeasureTextWidth(s, scale) : static_cast<float>(s.size() * 10);
@@ -857,7 +878,7 @@ void MonitorTest::renderStatusOverlay() {
             if (i == 0) {
                 textRenderer->RenderText(rightTexts[i], rx, ry, scale, 1.0f, 0.90f, 0.40f);
             } else {
-                textRenderer->RenderText(rightTexts[i], rx, ry, scale, tr, tg, tb);
+                textRenderer->RenderText(rightTexts[i], rx, ry, scale, cr, cg, cb);
             }
             ry += lh;
         }
@@ -985,57 +1006,73 @@ void MonitorTest::reportFps() {
         
         std::string modeStr;
         switch (config.mode) {
-            case TestMode::FIXED_FPS: modeStr = "固定帧率"; break;
-            case TestMode::JITTER_FPS: modeStr = "抖动模式"; break;
-            case TestMode::OSCILLATION_FPS: modeStr = "震荡模式"; break;
+            case TestMode::FIXED_FPS: modeStr = tr("固定帧率", "Fixed FPS"); break;
+            case TestMode::JITTER_FPS: modeStr = tr("抖动模式", "Jitter FPS"); break;
+            case TestMode::OSCILLATION_FPS: modeStr = tr("震荡模式", "Oscillation FPS"); break;
         }
         
         auto staticName = [&](int idx)->std::string {
             switch (idx) {
-                case 0: return "彩条"; case 1: return "灰阶渐变"; case 2: return "16阶灰条";
-                case 3: return "细棋盘(1px)"; case 4: return "粗棋盘"; case 5: return "网格32px";
-                case 6: return "网格8px"; case 7: return "RGB竖条"; case 8: return "十字+三分线";
-                case 9: return "纯黑"; case 10: return "纯白"; case 11: return "纯红";
-                case 12: return "纯绿"; case 13: return "纯蓝"; case 14: return "50%灰";
+                case 0: return language==Language::ZH? "彩条" : "Color Bars";
+                case 1: return language==Language::ZH? "灰阶渐变" : "Gray Gradient";
+                case 2: return language==Language::ZH? "16阶灰条" : "16-step Gray";
+                case 3: return language==Language::ZH? "细棋盘(1px)" : "Fine Checker (1px)";
+                case 4: return language==Language::ZH? "粗棋盘" : "Coarse Checker";
+                case 5: return language==Language::ZH? "网格32px" : "Grid 32px";
+                case 6: return language==Language::ZH? "网格8px" : "Grid 8px";
+                case 7: return language==Language::ZH? "RGB竖条" : "RGB Stripes";
+                case 8: return language==Language::ZH? "十字+三分线" : "Cross + Thirds";
+                case 9: return language==Language::ZH? "纯黑" : "Black";
+                case 10: return language==Language::ZH? "纯白" : "White";
+                case 11: return language==Language::ZH? "纯红" : "Red";
+                case 12: return language==Language::ZH? "纯绿" : "Green";
+                case 13: return language==Language::ZH? "纯蓝" : "Blue";
+                case 14: return language==Language::ZH? "50%灰" : "50% Gray";
             }
-            return "静态图样";
+            return language==Language::ZH? "静态图样" : "Static";
         };
         auto dynamicName = [&](int idx)->std::string {
             switch (idx) {
-                case 0: return "动态: 渐变+噪声"; case 1: return "动态: 高频噪声";
-                case 2: return "动态: 波浪干涉"; case 3: return "动态: 螺旋";
-                case 4: return "动态: 棋盘扰动"; case 5: return "动态: 辐射彩虹";
-                case 6: return "动态: 斜向干涉"; case 7: return "动态: RGBW轮播";
-                case 8: return "动态: 移动亮条"; case 9: return "动态: UFO移动";
-                case 10: return "动态: 1px反相闪烁"; case 11: return "动态: Zone Plate";
-                case 12: return "动态: 位平面闪烁"; case 13: return "动态: 彩色棋盘轮换";
-                case 14: return "动态: 蓝噪声滚动"; case 15: return "动态: 径向相位扫频";
-                case 16: return "动态: 旋转楔形线";
+                case 0: return language==Language::ZH? "动态: 渐变+噪声" : "Dyn: Gradient+Noise";
+                case 1: return language==Language::ZH? "动态: 高频噪声" : "Dyn: High-Freq Noise";
+                case 2: return language==Language::ZH? "动态: 波浪干涉" : "Dyn: Wave Interference";
+                case 3: return language==Language::ZH? "动态: 螺旋" : "Dyn: Spiral";
+                case 4: return language==Language::ZH? "动态: 棋盘扰动" : "Dyn: Checker Disturb";
+                case 5: return language==Language::ZH? "动态: 辐射彩虹" : "Dyn: Radial Rainbow";
+                case 6: return language==Language::ZH? "动态: 斜向干涉" : "Dyn: Diagonal Interf";
+                case 7: return language==Language::ZH? "动态: RGBW轮播" : "Dyn: RGBW Cycle";
+                case 8: return language==Language::ZH? "动态: 移动亮条" : "Dyn: Moving Bar";
+                case 9: return language==Language::ZH? "动态: UFO移动" : "Dyn: UFO Motion";
+                case 10: return language==Language::ZH? "动态: 1px反相闪烁" : "Dyn: 1px Temporal Flip";
+                case 11: return language==Language::ZH? "动态: Zone Plate" : "Dyn: Zone Plate";
+                case 12: return language==Language::ZH? "动态: 位平面闪烁" : "Dyn: Bit-Plane Flicker";
+                case 13: return language==Language::ZH? "动态: 彩色棋盘轮换" : "Dyn: Color Checker Cycle";
+                case 14: return language==Language::ZH? "动态: 蓝噪声滚动" : "Dyn: Blue-Noise Scroll";
+                case 15: return language==Language::ZH? "动态: 径向相位扫频" : "Dyn: Radial Phase Sweep";
+                case 16: return language==Language::ZH? "动态: 旋转楔形线" : "Dyn: Wedge Spin";
             }
-            return "动态图样";
+            return language==Language::ZH? "动态图样" : "Dynamic";
         };
-        std::string groupStr = (config.category == Category::STATIC_GROUP) ? "静态图样" : "动态压力";
+        std::string groupStr = (config.category == Category::STATIC_GROUP) ? tr("静态图样", "Static") : tr("动态压力", "Dynamic");
         std::string patStr = (config.category == Category::STATIC_GROUP)
             ? staticName(config.staticMode)
             : dynamicName(config.dynamicMode);
-
-        std::cout << "当前帧率: " << static_cast<int>(currentFps) << " FPS | "
-                  << "帧时间: " << std::fixed << std::setprecision(2) << frameTimeMs << " ms | "
-                  << "帧率模式: " << modeStr << " | "
-                  << "模式组: " << groupStr << " | "
-                  << "图样: " << patStr << " | "
-                  << (config.isPaused ? "已暂停" : "运行中") << std::endl;
-
-        if (loggingEnabled && logStream.is_open()) {
-            double tsec = std::chrono::duration<double>(now - startTime).count();
-            logStream << std::fixed << std::setprecision(2)
-                      << tsec << ',' << currentFps << ',' << frameTimeMs << ','
-                      << (config.category == Category::STATIC_GROUP ? "static" : "dynamic") << ','
-                      << '"' << patStr << '"' << ','
-                      << config.targetFps << ',' << modeStr
-                      << '\n';
-            logStream.flush();
+        if (language == Language::ZH) {
+            std::cout << "当前帧率: " << static_cast<int>(currentFps) << " FPS | "
+                      << "帧时间: " << std::fixed << std::setprecision(2) << frameTimeMs << " ms | "
+                      << "帧率模式: " << modeStr << " | "
+                      << "模式组: " << groupStr << " | "
+                      << "图样: " << patStr << " | "
+                      << (config.isPaused ? "已暂停" : "运行中") << std::endl;
+        } else {
+            std::cout << "FPS: " << static_cast<int>(currentFps) << " | "
+                      << "Frame: " << std::fixed << std::setprecision(2) << frameTimeMs << " ms | "
+                      << "Mode: " << modeStr << " | "
+                      << "Group: " << groupStr << " | "
+                      << "Pattern: " << patStr << " | "
+                      << (config.isPaused ? "Paused" : "Running") << std::endl;
         }
+
         
         frameCount = 0;
         lastFpsReportTime = now;
@@ -1071,16 +1108,23 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
 
     if (action == GLFW_PRESS) {
         switch (key) {
+#ifndef _WIN32
             case GLFW_KEY_P:
                 test->config.isPaused = !test->config.isPaused;
-                std::cout << (test->config.isPaused ? "测试已暂停" : "测试已恢复") << std::endl;
+                std::cout << (test->language==Language::ZH ? (test->config.isPaused ? "测试已暂停" : "测试已恢复")
+                                                                 : (test->config.isPaused ? "Paused" : "Resumed"))
+                          << std::endl;
                 break;
+#endif
 
             case GLFW_KEY_SPACE: {
                 // 切换模式组（静态/动态）
                 test->config.category = (test->config.category == Category::STATIC_GROUP)
                     ? Category::DYNAMIC_GROUP : Category::STATIC_GROUP;
-                std::cout << "模式组: " << (test->config.category == Category::STATIC_GROUP ? "静态图样" : "动态压力") << std::endl;
+                std::cout << (test->language==Language::ZH ? "模式组: " : "Group: ")
+                          << (test->config.category == Category::STATIC_GROUP ? (test->language==Language::ZH?"静态图样":"Static")
+                                                                               : (test->language==Language::ZH?"动态压力":"Dynamic"))
+                          << std::endl;
                 break;
             }
 
@@ -1088,10 +1132,10 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 bool isStatic = (test->config.category == Category::STATIC_GROUP);
                 if (isStatic) {
                     test->config.staticMode = (test->config.staticMode + 1) % 21;
-                    std::cout << "静态图样索引: " << test->config.staticMode << std::endl;
+                    std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
                 } else {
                     test->config.dynamicMode = (test->config.dynamicMode + 1) % 17;
-                    std::cout << "动态图样索引: " << test->config.dynamicMode << std::endl;
+                    std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
                 }
                 break;
             }
@@ -1100,73 +1144,37 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 bool isStatic = (test->config.category == Category::STATIC_GROUP);
                 if (isStatic) {
                     test->config.staticMode = (test->config.staticMode + 21 - 1) % 21;
-                    std::cout << "静态图样索引: " << test->config.staticMode << std::endl;
+                    std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
                 } else {
                     test->config.dynamicMode = (test->config.dynamicMode + 17 - 1) % 17;
-                    std::cout << "动态图样索引: " << test->config.dynamicMode << std::endl;
+                    std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
                 }
                 break;
             }
 
-            case GLFW_KEY_A: {
-                test->autoplayEnabled = !test->autoplayEnabled;
-                std::cout << (test->autoplayEnabled ? "自动轮播: 开" : "自动轮播: 关") << std::endl;
-                if (test->autoplayEnabled) test->lastModeSwitchTime = std::chrono::high_resolution_clock::now();
-                break;
-            }
-            case GLFW_KEY_LEFT_BRACKET: {
-                test->autoplayIntervalSec = std::max(0.2, test->autoplayIntervalSec - 1.0);
-                std::cout << "轮播间隔: " << test->autoplayIntervalSec << "s" << std::endl;
-                break;
-            }
-            case GLFW_KEY_RIGHT_BRACKET: {
-                test->autoplayIntervalSec = std::min(60.0, test->autoplayIntervalSec + 1.0);
-                std::cout << "轮播间隔: " << test->autoplayIntervalSec << "s" << std::endl;
-                break;
-            }
+#ifndef _WIN32
             case GLFW_KEY_K: {
                 bool ok = test->saveScreenshot();
-                std::cout << (ok ? "截图已保存" : "截图失败") << std::endl;
+                std::cout << (ok ? (test->language==Language::ZH?"截图已保存":"Screenshot saved")
+                                   : (test->language==Language::ZH?"截图失败":"Screenshot failed"))
+                          << std::endl;
                 break;
             }
-            case GLFW_KEY_T: {
-                test->loggingEnabled = !test->loggingEnabled;
-                if (test->loggingEnabled) {
-                    // 打开日志
-                    namespace fs = std::filesystem;
-                    fs::create_directories("dist/logs");
-                    auto now = std::chrono::system_clock::now();
-                    auto t = std::chrono::system_clock::to_time_t(now);
-                    std::tm tm{};
-#ifdef _WIN32
-                    localtime_s(&tm, &t);
-#else
-                    localtime_r(&t, &tm);
 #endif
-                    char buf[64];
-                    std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
-                    test->logFilePath = std::string("dist/logs/log-") + buf + ".csv";
-                    test->logStream.close();
-                    test->logStream.open(test->logFilePath, std::ios::out | std::ios::trunc);
-                    if (test->logStream.is_open()) {
-                        test->logStream << "time_s,fps,frame_ms,group,pattern,target_fps,mode\n";
-                        std::cout << "日志开启: " << test->logFilePath << std::endl;
-                    } else {
-                        test->loggingEnabled = false;
-                        std::cerr << "打开日志失败: " << test->logFilePath << std::endl;
-                    }
-                } else {
-                    if (test->logStream.is_open()) test->logStream.close();
-                    std::cout << "日志关闭" << std::endl;
-                }
-                break;
-            }
 
             case GLFW_KEY_V: {
                 test->config.vsyncEnabled = !test->config.vsyncEnabled;
                 glfwMakeContextCurrent(window);
                 glfwSwapInterval(test->config.vsyncEnabled ? 1 : 0);
-                std::cout << (test->config.vsyncEnabled ? "垂直同步: 开" : "垂直同步: 关") << std::endl;
+                std::cout << (test->language==Language::ZH ? (test->config.vsyncEnabled ? "垂直同步: 开" : "垂直同步: 关")
+                                                           : (test->config.vsyncEnabled ? "VSync: On" : "VSync: Off"))
+                          << std::endl;
+                break;
+            }
+
+            case GLFW_KEY_L: {
+                test->toggleLanguage();
+                std::cout << (test->language==Language::EN?"Language: English":"Language: Chinese") << std::endl;
                 break;
             }
 
@@ -1187,7 +1195,7 @@ void MonitorTest::framebufferSizeCallback(GLFWwindow* window, int width, int hei
 }
 
 void MonitorTest::errorCallback(int error, const char* description) {
-    std::cerr << "GLFW错误 " << error << ": " << description << std::endl;
+    std::cerr << "GLFW error " << error << ": " << description << std::endl;
 }
 
 bool MonitorTest::saveScreenshot() {
@@ -1219,32 +1227,63 @@ bool MonitorTest::saveScreenshot() {
         out.write(reinterpret_cast<const char*>(pixels.data() + static_cast<size_t>(y) * rowBytes), rowBytes);
     }
     out.close();
-    std::cout << "已保存截图: " << fname << std::endl;
+    std::cout << (language==Language::ZH?"已保存截图: ":"Saved screenshot: ") << fname << std::endl;
     return true;
 }
 
 void MonitorTest::printControls() const {
-    std::cout << "\n=== 控制说明 ===" << std::endl;
-    std::cout << "ESC    - 退出程序" << std::endl;
-    std::cout << "P      - 暂停/继续" << std::endl;
-    std::cout << "SPACE  - 切换模式组(静态/动态)" << std::endl;
-    std::cout << "←/→     - 上一/下一图样" << std::endl;
-    std::cout << "V      - 垂直同步 开/关" << std::endl;
-    std::cout << "A      - 自动轮播 开/关" << std::endl;
-    std::cout << "[ / ]  - 轮播间隔 -/+ 1s" << std::endl;
-    std::cout << "K      - 截图保存 (PPM)" << std::endl;
-    std::cout << "T      - 日志 开/关 (CSV)" << std::endl;
+    std::cout << (language==Language::ZH?"\n=== 控制说明 ===":"\n=== Controls ===") << std::endl;
+    std::cout << (language==Language::ZH?"ESC    - 退出程序":"ESC    - Exit") << std::endl;
+    #ifndef _WIN32
+    std::cout << (language==Language::ZH?"P      - 暂停/继续":"P      - Pause/Resume") << std::endl;
+    #endif
+    std::cout << (language==Language::ZH?"SPACE  - 切换模式组(静态/动态)":"SPACE  - Toggle group (static/dynamic)") << std::endl;
+    std::cout << (language==Language::ZH?"←/→     - 上一/下一图样":"←/→     - Prev/Next pattern") << std::endl;
+    #ifndef _WIN32
+    std::cout << (language==Language::ZH?"V      - 垂直同步 开/关":"V      - VSync On/Off") << std::endl;
+    std::cout << (language==Language::ZH?"K      - 截图保存 (PPM)":"K      - Save screenshot (PPM)") << std::endl;
+    std::cout << "L      - Toggle language (ZH/EN)" << std::endl;
+    #endif
     std::cout << "===============\n" << std::endl;
 }
 
 void MonitorTest::printSystemInfo() const {
-    std::cout << "\n=== 系统信息 ===" << std::endl;
-    std::cout << "OpenGL版本: " << toSafeString(glGetString(GL_VERSION)) << std::endl;
-    std::cout << "显卡厂商: " << toSafeString(glGetString(GL_VENDOR)) << std::endl;
-    std::cout << "显卡型号: " << toSafeString(glGetString(GL_RENDERER)) << std::endl;
-    std::cout << "分辨率: " << windowWidth << "x" << windowHeight << std::endl;
-    std::cout << "目标: 10bit色深全带宽压力测试" << std::endl;
+    std::cout << (language==Language::ZH?"\n=== 系统信息 ===":"\n=== System Info ===") << std::endl;
+    std::cout << (language==Language::ZH?"OpenGL版本: ":"OpenGL: ") << toSafeString(glGetString(GL_VERSION)) << std::endl;
+    std::cout << (language==Language::ZH?"显卡厂商: ":"Vendor: ") << toSafeString(glGetString(GL_VENDOR)) << std::endl;
+    std::cout << (language==Language::ZH?"显卡型号: ":"Renderer: ") << toSafeString(glGetString(GL_RENDERER)) << std::endl;
+    std::cout << (language==Language::ZH?"分辨率: ":"Resolution: ") << windowWidth << "x" << windowHeight << std::endl;
+    std::cout << (language==Language::ZH?"目标: 10bit色深全带宽压力测试":"Goal: 10-bit deep color bandwidth stress") << std::endl;
     std::cout << "================\n" << std::endl;
+}
+
+const char* MonitorTest::tr(const char* zh, const char* en) const {
+    return language == Language::ZH ? zh : en;
+}
+
+std::string MonitorTest::onOff(bool v) const {
+    return language == Language::ZH ? (v ? "开" : "关") : (v ? "On" : "Off");
+}
+
+void MonitorTest::toggleLanguage() {
+    language = (language == Language::ZH) ? Language::EN : Language::ZH;
+}
+
+Language MonitorTest::detectLanguage() {
+    const char* env = std::getenv("DISPLAY_HW_LANG");
+    if (env) {
+        std::string v(env);
+        for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v.find("en") != std::string::npos) return Language::EN;
+        if (v.find("zh") != std::string::npos || v.find("cn") != std::string::npos) return Language::ZH;
+    }
+    const char* sys = std::getenv("LANG");
+    if (sys) {
+        std::string v(sys);
+        for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v.find("zh") != std::string::npos || v.find("cn") != std::string::npos) return Language::ZH;
+    }
+    return Language::EN;
 }
 
 std::string MonitorTest::chooseFontPath() const {

@@ -11,6 +11,3 @@ set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-
-# 尽量静态链接标准库（其余依赖使用 dll）
-set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++")
