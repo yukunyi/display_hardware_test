@@ -25,7 +25,6 @@ struct TestConfig {
     int dynamicMode = 0;
     int auxMode = 0;
     bool vsyncEnabled = false;
-    int gamutMode = 0; // 0=Full, 1=R, 2=G, 3=B, 4=C, 5=M, 6=Y, 7=Gray
 };
 
 class MonitorTest {
@@ -42,6 +41,7 @@ private:
     double currentFps;
     double targetFrameTime;
     double frameTimeMs;
+    unsigned long long frameIndex;
     int windowWidth;
     int windowHeight;
     static const std::string vertexShaderSource;
@@ -55,6 +55,7 @@ private:
     bool extremeMode = false;
     bool dynamicOscillation = false; // true=OSC, false=JITTER
     int preferredRefreshHz = 0;      // the chosen refresh rate hint
+    int pacingSelection = 0;         // 0=Fixed, 1=Range, 2=Unlimited
 
 public:
     MonitorTest();
@@ -84,4 +85,11 @@ private:
     std::string onOff(bool v) const;
     void toggleLanguage();
     std::chrono::high_resolution_clock::time_point lastLoopTime;
+    // Key repeat states for fast adjustments
+    bool upWasDown = false, downWasDown = false;
+    bool f5WasDown = false, f6WasDown = false, f7WasDown = false, f8WasDown = false;
+    std::chrono::high_resolution_clock::time_point upHoldStart, downHoldStart;
+    std::chrono::high_resolution_clock::time_point f5HoldStart, f6HoldStart, f7HoldStart, f8HoldStart;
+    std::chrono::high_resolution_clock::time_point upLastStep, downLastStep;
+    std::chrono::high_resolution_clock::time_point f5LastStep, f6LastStep, f7LastStep, f8LastStep;
 };

@@ -52,7 +52,7 @@ uniform vec2 uResolution;
 uniform int uColorVariation;
 uniform int uContentMode;
 uniform int uCategory; // 0: STATIC, 1: DYNAMIC
-uniform int uGamutMode; // 0: Full, 1:R, 2:G, 3:B, 4:C, 5:M, 6:Y, 7:Gray
+uniform int uFrameIndex; // frame counter to force per-frame changes
 
 // 10-bit 量化（0..1023）
 float q10(float v) { return clamp(floor(clamp(v,0.0,1.0) * 1023.0 + 0.5) / 1023.0, 0.0, 1.0); }
@@ -63,142 +63,130 @@ vec3 hsv2rgb(vec3 c){
     return c.z * mix(vec3(1.0), rgb, c.y);
 }
 
-// RGB->HSV（h:[0,1), s,v:[0,1]）
-vec3 rgb2hsv(vec3 c){
-    float cmax = max(c.r, max(c.g, c.b));
-    float cmin = min(c.r, min(c.g, c.b));
-    float d = cmax - cmin;
-    float h = 0.0;
-    if (d > 1e-6) {
-        if (cmax == c.r) {
-            h = mod((c.g - c.b) / d, 6.0);
-        } else if (cmax == c.g) {
-            h = (c.b - c.r) / d + 2.0;
-        } else {
-            h = (c.r - c.g) / d + 4.0;
-        }
-        h /= 6.0;
-        if (h < 0.0) h += 1.0;
-    }
-    float s = cmax <= 0.0 ? 0.0 : d / cmax;
-    float v = cmax;
-    return vec3(h, s, v);
-}
+// 前置声明：在 generateComplexColor 中调用到的函数（定义在后文）
+vec3 bitPlaneFlicker(vec2 uv, float time);
 
-// 将颜色限制/偏向某个色相扇区（用于高熵带宽测试不同颜色）
-vec3 applyGamutSector(vec3 c, vec2 uv, float t, int mode) {
-    if (mode <= 0) return c; // Full gamut
-    // 噪声抖动，避免纯色固定
+// 分区渐变颜色（避免硬切换），用于增加不可压缩性
+vec3 tileGradColor(vec2 uv, float time, float pf){
     vec2 p = uv * uResolution;
-    float n = fract(sin(dot(floor(p), vec2(15.7, 47.3)) + t * 13.3) * 31871.1);
-    float jitter = (n - 0.5) * 0.12; // ±0.06 hue 抖动
-
-    if (mode == 7) {
-        // 灰度：直接返回灰阶（保持亮度高以占带宽）
-        float g = clamp((c.r + c.g + c.b) / 3.0, 0.0, 1.0);
-        return vec3(g);
-    }
-
-    float targetH = 0.0;
-    if (mode == 1) targetH = 0.0;            // R
-    else if (mode == 2) targetH = 1.0/3.0;   // G
-    else if (mode == 3) targetH = 2.0/3.0;   // B
-    else if (mode == 4) targetH = 0.5;       // C (between G and B)
-    else if (mode == 5) targetH = 5.0/6.0;   // M
-    else if (mode == 6) targetH = 1.0/6.0;   // Y
-    else return c;
-
-    vec3 hsv = rgb2hsv(c);
-    hsv.x = fract(targetH + jitter);
-    hsv.y = max(hsv.y, 0.85); // 高饱和度以覆盖位深
-    return hsv2rgb(hsv);
+    // 两套偏移网格，错位避免与编码 slice 对齐
+    vec2 spA = vec2(32.0, 28.0);
+    vec2 spB = vec2(36.0, 24.0);
+    vec2 idxA = floor(p / spA);
+    vec2 idxB = floor((p + vec2(16.0,12.0)) / spB);
+    float seed = fract(sin(dot(idxA, vec2(12.9898,78.233)) + dot(idxB, vec2(39.3468,11.135)) + pf*7.1 + time*0.7) * 43758.5453);
+    float hue = fract(seed + 0.123 * sin(dot(idxA, vec2(3.1,5.7))) + 0.071 * sin(dot(idxB, vec2(2.3,4.9))));
+    vec2 localA = fract(p / spA);
+    vec2 localB = fract((p + vec2(16.0,12.0)) / spB);
+    float g = clamp(localA.x * 0.6 + localB.y * 0.4, 0.0, 1.0);
+    float sat = 0.88;
+    float val = 0.70 + 0.30 * g; // 单帧渐变
+    return hsv2rgb(vec3(hue, sat, val));
 }
+
+// RGB->HSV（h:[0,1), s,v:[0,1]）
 
 // 高熵颜色场（避免大块重复色）
 vec3 generateComplexColor(vec2 uv, float time, int variation) {
     if (variation == -1) return vec3(0.0);
     vec2 p = uv * uResolution;
     float t = time;
+    float pf = float(uFrameIndex);
+    float tf = t + pf * 0.031; // per-frame phase offset
 
     // 基础哈希（避免使用纹理）
-    float h1 = fract(sin(dot(floor(p), vec2(12.9898, 78.233)) + t * 19.19) * 43758.5453);
-    float h2 = fract(sin(dot(floor(p)+13.0, vec2(39.3468, 11.135)) + t * 23.17) * 24634.6345);
-    float h3 = fract(sin(dot(floor(p)+71.0, vec2(9.154, 27.983)) + t * 29.41) * 17431.3711);
+    float h1 = fract(sin(dot(floor(p), vec2(12.9898, 78.233)) + tf * 19.19 + pf * 57.53) * 43758.5453);
+    float h2 = fract(sin(dot(floor(p)+13.0, vec2(39.3468, 11.135)) + tf * 23.17 + pf * 31.17) * 24634.6345);
+    float h3 = fract(sin(dot(floor(p)+71.0, vec2(9.154, 27.983)) + tf * 29.41 + pf * 41.99) * 17431.3711);
 
     vec3 c;
     if (variation == 0) {
-        // 独立通道哈希
-        c = vec3(h1, h2, h3);
+        // 色轮#1：经典 HSV 轮，缓慢旋转
+        vec2 d = (uv - 0.5) * 2.0; float r = length(d);
+        float rot = t * 0.06;
+        float h = fract((atan(d.y,d.x) / 6.2831853) + 1.0 + rot);
+        float v2 = clamp(1.0 - r * 0.2, 0.0, 1.0);
+        c = hsv2rgb(vec3(h, 0.9, v2));
     } else if (variation == 1) {
-        // 多尺度哈希混合
+        // 多尺度哈希混合（噪声#1）
         vec2 p2 = p * 0.5; vec2 p3 = p * 2.7;
-        float m1 = fract(sin(dot(floor(p2), vec2(15.7, 47.3)) + t * 13.3) * 31871.1);
-        float m2 = fract(sin(dot(floor(p3), vec2(61.3, 21.9)) + t * 31.7) * 55147.3);
+        float m1 = fract(sin(dot(floor(p2), vec2(15.7, 47.3)) + tf * 13.3 + pf * 23.0) * 31871.1);
+        float m2 = fract(sin(dot(floor(p3), vec2(61.3, 21.9)) + tf * 31.7 + pf * 17.0) * 55147.3);
         c = vec3(mix(h1, m1, 0.5), mix(h2, m2, 0.5), mix(h3, h1, 0.5));
     } else if (variation == 2) {
-        // 频谱混合（不公倍频率）
-        float r = fract(sin(uv.x * 123.0 + uv.y * 173.0 + t * 2.17) * 43758.3);
-        float g = fract(sin(uv.x * 231.0 + uv.y * 119.0 - t * 1.93) * 31871.7);
-        float b = fract(sin(uv.x * 199.0 + uv.y * 157.0 + t * 2.71) * 27493.9);
-        c = vec3(r,g,b);
+        // 频谱混合（中频条纹，三通道不同朝向/频率）
+        float sr = 0.5 + 0.5 * sin(6.28318 * (uv.x * 38.0 + uv.y * 5.0) + tf * 2.0);
+        float sg = 0.5 + 0.5 * sin(6.28318 * (uv.x * 7.0  + uv.y * 33.0) - tf * 1.7);
+        float sb = 0.5 + 0.5 * sin(6.28318 * (uv.x * 0.0  + uv.y * 41.0) + tf * 2.6);
+        c = vec3(sr, sg, sb);
     } else if (variation == 3) {
-        // 蓝噪声滚动
-        vec2 pp = p / 2.0 + vec2(t * 60.0, t * 47.0);
-        float n1 = fract(sin(dot(floor(pp), vec2(12.9898, 78.233))) * 43758.5453);
-        float n2 = fract(sin(dot(floor(pp + 23.0), vec2(39.3468, 11.135))) * 24634.6345);
+        // 蓝噪声滚动（使用取模防止大坐标精度丢失导致纯色）；颜色采用单帧渐变映射
+        vec2 pp = p * 0.5 + vec2(tf * 12.0, tf * 9.4);
+        vec2 cell = floor(mod(pp, 1024.0));
+        float n1 = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+        float n2 = fract(sin(dot(cell + 23.0, vec2(39.3468, 11.135))) * 24634.6345);
         float v = clamp((n1 * 0.7 + n2 * 0.3), 0.0, 1.0);
-        c = vec3(fract(v + 0.33), fract(v + 0.66), v);
+        // 使用 v->hue 的渐变映射，避免颜色切换，帧间运动靠 pp 滚动实现
+        float hue = v;
+        c = hsv2rgb(vec3(hue, 0.9, 0.95));
     } else if (variation == 4) {
-        // 径向扰动 + 相位扫频
+        // 径向扰动 + 旋涡条纹（与区域板区分：更强调角向旋涡）
         vec2 d = (uv - 0.5) * 2.0;
         float r = length(d);
         float a = atan(d.y, d.x);
-        float v = fract(sin(r * 333.0 + a * 177.0 + t * 3.0) * 32768.0);
-        c = vec3(v, fract(v + 0.37), fract(v + 0.73));
+        float a2 = a + r * 3.0 + tf * 0.4;
+        float v1 = 0.5 + 0.5 * sin(180.0 * a2);
+        float v2 = 0.5 + 0.5 * sin(120.0 * (r + 0.3 * a2) + tf * 1.7);
+        float v3 = 0.5 + 0.5 * sin(90.0  * (r - 0.2 * a2) - tf * 1.1);
+        c = vec3(v1, v2, v3);
     } else if (variation == 5) {
-        // 区域板动态（避免等灰）
+        // 区域板动态（Zoneplate Dynamic）：更丰富的渐变色，强调径向频率+角向相位
         vec2 d = (uv - 0.5) * 2.0;
-        float r2 = dot(d,d);
-        float base = 0.5 + 0.5 * sin(90.0 * r2 + t * 1.8);
-        c = vec3(base, fract(base + 0.31), fract(base + 0.62));
+        float r = length(d);
+        float a = atan(d.y, d.x);
+        float aN = (a / 6.2831853) + 1.0;
+        // 动态环频，随时间与帧序轻微变化，保证逐帧不同
+        float w = mix(80.0, 240.0, 0.5 + 0.5 * sin(tf * 0.27 + pf * 0.013));
+        float ring = 0.5 + 0.5 * sin(w * r * r + tf * 1.3 + pf * 0.11);
+        // 色相由角度、半径与环形相位共同决定，保证单帧内色彩丰富但连续
+        float hue = fract(0.28 * aN + 0.35 * r + 0.15 * ring + tf * 0.07 + pf * 0.017);
+        float sat = 0.75 + 0.25 * (0.5 + 0.5 * sin(6.0 * a + 3.0 * r + tf * 0.9 + pf * 0.05));
+        float val = 0.55 + 0.45 * ring;
+        c = hsv2rgb(vec3(hue, sat, val));
     } else if (variation == 6) {
-        // 混合场（通道交错不同相位/尺度）
-        float r = fract(sin(dot(p, vec2(0.251, 0.391)) + t * 2.3) * 51413.0);
-        float g = fract(sin(dot(p, vec2(0.173, 0.613)) - t * 1.7) * 37199.0);
-        float b = fract(sin(dot(p, vec2(0.421, 0.287)) + t * 3.1) * 29761.0);
-        c = vec3(r,g,b);
+        // 混合场（通道朝向/频段显著不同，拉大差异）
+        float rr = 0.5 + 0.5 * sin(6.28318 * (dot(uv, vec2( 1.0,  0.15)) * 45.0) + tf * 2.1);
+        float gg = 0.5 + 0.5 * sin(6.28318 * (dot(uv, vec2(-0.2,  1.00)) * 37.0) - tf * 1.8);
+        float bb = 0.5 + 0.5 * sin(6.28318 * (dot(uv, vec2( 0.9, -0.30)) * 53.0) + tf * 2.9);
+        c = vec3(rr, gg, bb);
     } else if (variation == 7) {
         // HSV 全色域覆盖（平滑，无抖动）
-        float h = fract(uv.x + uv.y + t*0.05);
+        float h = fract(uv.x + uv.y + tf*0.35 + pf*0.123);
         float s = 0.9;
         float v = 0.9;
         c = hsv2rgb(vec3(h,s,v));
     } else if (variation == 8) {
         // 谱梯度混合（平滑，无抖动）
-        float w = fract(uv.x*0.37 + uv.y*0.41 + t*0.10);
+        float w = fract(uv.x*0.37 + uv.y*0.41 + tf*0.50 + pf*0.217);
         vec3 a = vec3(1.0, 0.0, 0.5);
         vec3 b2 = vec3(0.0, 1.0, 1.0);
         c = mix(a, b2, w);
     } else if (variation == 9) {
         // Lissajous 色域轨迹（叠加噪声防止重复块）
-        float r = sin(uv.x*157.0 + t*2.31) * sin(uv.y*133.0 - t*1.77) * 0.5 + 0.5;
-        float g = sin(uv.x*141.0 - t*2.07) * sin(uv.y*149.0 + t*1.61) * 0.5 + 0.5;
-        float b = sin(uv.x*163.0 + t*2.83) * sin(uv.y*127.0 - t*1.29) * 0.5 + 0.5;
+        float r = sin(uv.x*157.0 + tf*2.31 + pf*1.1) * sin(uv.y*133.0 - tf*1.77 + pf*0.7) * 0.5 + 0.5;
+        float g = sin(uv.x*141.0 - tf*2.07 + pf*0.9) * sin(uv.y*149.0 + tf*1.61 + pf*1.3) * 0.5 + 0.5;
+        float b = sin(uv.x*163.0 + tf*2.83 + pf*0.5) * sin(uv.y*127.0 - tf*1.29 + pf*1.7) * 0.5 + 0.5;
         c = vec3(r,g,b);
     } else if (variation == 10) {
-        // HSV 色轮（平滑，随时间旋转）：角度->色相，半径->亮度
-        vec2 d = (uv - 0.5) * 2.0;
-        float rot = t * 0.08; // 缓慢旋转速度（转/秒的比例）
-        float h = fract((atan(d.y,d.x) / 6.2831853) + 1.0 + rot);
-        float v2 = clamp(length(d), 0.0, 1.0);
-        c = hsv2rgb(vec3(h, 0.9, 1.0 - v2*0.2));
+        // 位平面闪烁（Bit-Plane Flicker）：三通道不同位平面逐帧翻转
+        c = bitPlaneFlicker(uv, t);
     } else if (variation == 11) {
         // 时域色相扫动（平滑）：hue 随时间线性变化
-        float h = fract(uv.x + t*0.05);
+        float h = fract(uv.x + tf*0.55 + pf*0.21);
         c = hsv2rgb(vec3(h, 0.85, 0.95));
     } else if (variation == 12) {
         // 三正弦全色域（平滑）：相位错开 120 度
-        float ph = t*0.35;
+        float ph = tf*0.85 + pf*0.23;
         float r = 0.5 + 0.5*sin(6.28318*(uv.x*0.23 + uv.y*0.31) + ph);
         float g = 0.5 + 0.5*sin(6.28318*(uv.x*0.29 + uv.y*0.17) + ph + 2.094);
         float b = 0.5 + 0.5*sin(6.28318*(uv.x*0.19 + uv.y*0.27) + ph + 4.188);
@@ -206,8 +194,8 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
     } else if (variation == 13) {
         // 伪 YUV->RGB 扫动（平滑）：Y 固定、UV 扫动
         float Y = 0.7;
-        float U = sin(uv.x*3.0 + t*0.4)*0.5;
-        float V = sin(uv.y*3.0 - t*0.5)*0.5;
+        float U = sin(uv.x*3.0 + tf*1.2 + pf*0.7)*0.5;
+        float V = sin(uv.y*3.0 - tf*1.5 + pf*0.9)*0.5;
         float R = clamp(Y + 1.13983*V, 0.0, 1.0);
         float G = clamp(Y - 0.39465*U - 0.58060*V, 0.0, 1.0);
         float B = clamp(Y + 2.03211*U, 0.0, 1.0);
@@ -220,8 +208,6 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
         c = vec3(r,g,b);
     }
 
-    // 颜色扇区限制（动态测试不同色域/颜色）
-    c = applyGamutSector(c, uv, t, uGamutMode);
     // 10-bit 量化，降低压缩可预测性同时确保位深覆盖
     c = vec3(q10(c.r), q10(c.g), q10(c.b));
     return c;
@@ -587,12 +573,16 @@ MonitorTest::MonitorTest()
     , frameTimeMs(0.0)
     , windowWidth(0)
     , windowHeight(0)
+    , frameIndex(0)
 {
     startTime = std::chrono::high_resolution_clock::now();
     lastFrameTime = startTime;
     lastFpsReportTime = startTime;
     lastLoopTime = startTime;
     language = detectLanguage();
+    // init repeat timers
+    upHoldStart = downHoldStart = f5HoldStart = f6HoldStart = f7HoldStart = f8HoldStart = startTime;
+    upLastStep = downLastStep = f5LastStep = f6LastStep = f7LastStep = f8LastStep = startTime;
 }
 
 MonitorTest::~MonitorTest() {
@@ -867,11 +857,7 @@ void MonitorTest::renderStatusOverlay() {
         }
     }
     leftLines.push_back({pacing, cr, cg, cb, false});
-    if (!config.vsyncEnabled && config.mode != TestMode::UNLIMITED_FPS && useDynamicFrameRange) {
-        std::string strat = dynamicOscillation ? tr("范围策略: 震荡","Range: Oscillation")
-                                               : tr("范围策略: 抖动","Range: Jitter");
-        leftLines.push_back({strat, cr, cg, cb, false});
-    }
+    // 动态范围默认使用抖动策略
     std::string groupStr;
     if (config.category == Category::STATIC_GROUP) groupStr = tr("静态图样", "Static");
     else if (config.category == Category::DYNAMIC_GROUP) groupStr = tr("动态高熵", "High-Entropy");
@@ -904,7 +890,7 @@ void MonitorTest::renderStatusOverlay() {
     };
     auto dynamicName = [&](int idx)->std::string {
         switch (idx) {
-            case 0: return language==Language::ZH? "高熵: 通道哈希" : "HE: Channel Hash";
+            case 0: return language==Language::ZH? "高熵: HSV 色轮" : "HE: HSV Wheel";
             case 1: return language==Language::ZH? "高熵: 多尺度哈希" : "HE: Multi-Scale Hash";
             case 2: return language==Language::ZH? "高熵: 频谱混合" : "HE: Spectral Mix";
             case 3: return language==Language::ZH? "高熵: 蓝噪声滚动" : "HE: Blue-Noise Scroll";
@@ -914,7 +900,7 @@ void MonitorTest::renderStatusOverlay() {
             case 7: return language==Language::ZH? "高熵: HSV 全色域" : "HE: HSV Full-Gamut";
             case 8: return language==Language::ZH? "高熵: 谱梯度混合" : "HE: Spectral Gradient";
             case 9: return language==Language::ZH? "高熵: Lissajous 色域" : "HE: Lissajous Field";
-            case 10: return language==Language::ZH? "高熵: HSV 色轮" : "HE: HSV Wheel";
+            case 10: return language==Language::ZH? "高熵: 位平面闪烁" : "HE: Bit-Plane Flicker";
             case 11: return language==Language::ZH? "高熵: 色相扫动" : "HE: Hue Sweep";
             case 12: return language==Language::ZH? "高熵: 三正弦色域" : "HE: Tri-Sine Gamut";
             case 13: return language==Language::ZH? "高熵: YUV 扫动" : "HE: YUV Sweep";
@@ -955,22 +941,7 @@ void MonitorTest::renderStatusOverlay() {
     leftLines.push_back({std::string(tr("垂直同步: ", "VSync: ")) + onOff(config.vsyncEnabled), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("目标帧率: ", "Target FPS: ")) + std::to_string(config.targetFps), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("范围: ", "Range: ")) + std::to_string(config.minFps) + "~" + std::to_string(config.maxFps), cr, cg, cb, config.isPaused});
-    {
-        auto gamutName = [&](int m)->std::string{
-            switch(m){
-                case 0: return language==Language::ZH?"全色域":"Full";
-                case 1: return language==Language::ZH?"红域":"Red";
-                case 2: return language==Language::ZH?"绿域":"Green";
-                case 3: return language==Language::ZH?"蓝域":"Blue";
-                case 4: return language==Language::ZH?"青域":"Cyan";
-                case 5: return language==Language::ZH?"品红域":"Magenta";
-                case 6: return language==Language::ZH?"黄域":"Yellow";
-                case 7: return language==Language::ZH?"灰阶":"Gray";
-            }
-            return language==Language::ZH?"全色域":"Full";
-        };
-        leftLines.push_back({std::string(tr("色域: ", "Gamut: ")) + gamutName(config.gamutMode), cr, cg, cb, false});
-    }
+    // 动态噪声默认全色域覆盖，无需显示切换状态
     if (config.isPaused) leftLines.push_back({tr("状态: 已暂停", "Status: Paused"), 1.0f, 0.2f, 0.2f, false});
     }
 
@@ -1004,15 +975,13 @@ void MonitorTest::renderStatusOverlay() {
 #endif
         items.push_back({"SPACE", tr("切换模式组", "Toggle group")});
         items.push_back({"←/→", tr("上一/下一图样", "Prev/Next pattern")});
+        items.push_back({"↑/↓", tr("固定帧率 -/+（长按快调）", "Fixed FPS -/+ (hold fast)")});
         items.push_back({"V", tr("垂直同步 开/关", "VSync On/Off")});
     items.push_back({"F1", tr("精简显示 开/关", "Minimal overlay On/Off")});
-    items.push_back({"F2", tr("帧率策略 固定/动态范围", "Pacing Fixed/Range")});
-    items.push_back({"F3", tr("动态策略 抖动/震荡", "Range Jitter/Osc")});
-    items.push_back({"F4", tr("无限制帧率 开/关", "Unlimited FPS On/Off")});
+        items.push_back({"F2", tr("帧率策略 固定/动态/无限制", "Pacing Fixed/Range/Unlimited")});
     items.push_back({"F12", tr("一键极限模式", "Extreme mode toggle")});
-    items.push_back({"F5/F6", tr("动态最小帧 -/+", "Range min -/+" )});
-    items.push_back({"F7/F8", tr("动态最大帧 -/+", "Range max -/+" )});
-    items.push_back({"F9/F10", tr("色域 上一/下一", "Gamut prev/next")});
+    items.push_back({"F5/F6", tr("动态最小帧 -/+（长按快调）", "Range min -/+ (hold fast)" )});
+    items.push_back({"F7/F8", tr("动态最大帧 -/+（长按快调）", "Range max -/+ (hold fast)" )});
         items.push_back({"L", "Toggle language (ZH/EN)"});
 
         float col1W = 0.0f; float col2W = 0.0f; float rightTotalH = 0.0f;
@@ -1082,6 +1051,7 @@ void MonitorTest::run() {
         handleInput();
         
         if (!config.isPaused) {
+            frameIndex++;
             update();
             render();
         } else {
@@ -1131,6 +1101,7 @@ void MonitorTest::render() {
     // 更新uniform变量
     shader->setFloat("uTime", static_cast<float>(currentTime));
     shader->setVec2("uResolution", static_cast<float>(windowWidth), static_cast<float>(windowHeight));
+    shader->setInt("uFrameIndex", static_cast<int>(frameIndex & 0x7fffffff));
     // 设置分类与子模式
     int cat = (config.category == Category::STATIC_GROUP) ? 0 : ((config.category == Category::DYNAMIC_GROUP) ? 1 : 2);
     int sub = (cat == 0) ? config.staticMode : ((cat==1)? config.dynamicMode : config.auxMode);
@@ -1139,7 +1110,6 @@ void MonitorTest::render() {
     // 动态复杂内容的子变体（用于 generateComplexColor）
     int dynVar = (cat == 1) ? sub : 0;
     shader->setInt("uColorVariation", dynVar);
-    shader->setInt("uGamutMode", (cat == 1) ? config.gamutMode : 0);
     // 无参数传递（已去掉可调参数）
     
     // 绘制全屏四边形
@@ -1155,17 +1125,100 @@ void MonitorTest::handleInput() {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, true);
     }
+
+    // Long-press fast adjustments for target/min/max FPS
+    auto now = std::chrono::high_resolution_clock::now();
+    auto pressed = [&](int key){ return glfwGetKey(window, key) == GLFW_PRESS; };
+    auto elapsedMs = [](auto a, auto b){ return std::chrono::duration<double, std::milli>(a - b).count(); };
+    auto stepFor = [&](double holdMs)->int {
+        if (holdMs > 1700) return 20;
+        if (holdMs > 700) return 5;
+        return 1;
+    };
+    auto repeatDue = [&](double sinceLastMs)->bool { return sinceLastMs >= 60.0; };
+
+    // Up: targetFps +; Down: targetFps -
+    bool upNow = pressed(GLFW_KEY_UP);
+    bool downNow = pressed(GLFW_KEY_DOWN);
+    if (upNow) {
+        if (!upWasDown) { upWasDown = true; upHoldStart = now; upLastStep = now; config.targetFps = std::min(config.targetFps + 1, 360); }
+        double hold = elapsedMs(now, upHoldStart);
+        double since = elapsedMs(now, upLastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.targetFps = std::min(config.targetFps + step, 360);
+            upLastStep = now;
+        }
+    } else if (upWasDown) { upWasDown = false; }
+
+    if (downNow) {
+        if (!downWasDown) { downWasDown = true; downHoldStart = now; downLastStep = now; config.targetFps = std::max(config.targetFps - 1, 10); }
+        double hold = elapsedMs(now, downHoldStart);
+        double since = elapsedMs(now, downLastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.targetFps = std::max(config.targetFps - step, 10);
+            downLastStep = now;
+        }
+    } else if (downWasDown) { downWasDown = false; }
+
+    // F5/F6: minFps -/+
+    bool f5Now = pressed(GLFW_KEY_F5);
+    bool f6Now = pressed(GLFW_KEY_F6);
+    bool f7Now = pressed(GLFW_KEY_F7);
+    bool f8Now = pressed(GLFW_KEY_F8);
+    if (f5Now) {
+        if (!f5WasDown) { f5WasDown = true; f5HoldStart = now; f5LastStep = now; config.minFps = std::max(config.minFps - 1, 10); }
+        double hold = elapsedMs(now, f5HoldStart);
+        double since = elapsedMs(now, f5LastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.minFps = std::max(config.minFps - step, 10);
+            f5LastStep = now;
+        }
+        if (config.minFps >= config.maxFps) config.minFps = config.maxFps - 1;
+    } else if (f5WasDown) { f5WasDown = false; }
+
+    if (f6Now) {
+        if (!f6WasDown) { f6WasDown = true; f6HoldStart = now; f6LastStep = now; config.minFps = std::min(config.minFps + 1, config.maxFps - 1); }
+        double hold = elapsedMs(now, f6HoldStart);
+        double since = elapsedMs(now, f6LastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.minFps = std::min(config.minFps + step, config.maxFps - 1);
+            f6LastStep = now;
+        }
+    } else if (f6WasDown) { f6WasDown = false; }
+
+    // F7/F8: maxFps -/+
+    if (f7Now) {
+        if (!f7WasDown) { f7WasDown = true; f7HoldStart = now; f7LastStep = now; config.maxFps = std::max(config.maxFps - 1, config.minFps + 1); }
+        double hold = elapsedMs(now, f7HoldStart);
+        double since = elapsedMs(now, f7LastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.maxFps = std::max(config.maxFps - step, config.minFps + 1);
+            f7LastStep = now;
+        }
+    } else if (f7WasDown) { f7WasDown = false; }
+
+    if (f8Now) {
+        if (!f8WasDown) { f8WasDown = true; f8HoldStart = now; f8LastStep = now; config.maxFps = std::min(config.maxFps + 1, 360); }
+        double hold = elapsedMs(now, f8HoldStart);
+        double since = elapsedMs(now, f8LastStep);
+        if (hold > 200.0 && repeatDue(since)) {
+            int step = stepFor(hold);
+            config.maxFps = std::min(config.maxFps + step, 360);
+            f8LastStep = now;
+        }
+        if (config.maxFps <= config.minFps) config.maxFps = config.minFps + 1;
+    } else if (f8WasDown) { f8WasDown = false; }
 }
 
 void MonitorTest::updateFrameRate() {
-    // 在关闭 VSync 的情况下，根据“动态范围”切换固定/随机帧率
-    // 当处于“无限制帧率”模式时不改写模式
+    // 在关闭 VSync 的情况下，根据“动态范围”切换固定/随机帧率（仅 JITTER），无限制模式不改写
     if (!config.vsyncEnabled && config.mode != TestMode::UNLIMITED_FPS) {
-        if (useDynamicFrameRange) {
-            config.mode = dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
-        } else {
-            config.mode = TestMode::FIXED_FPS;
-        }
+        config.mode = useDynamicFrameRange ? TestMode::JITTER_FPS : TestMode::FIXED_FPS;
     }
     double targetFps = calculateTargetFps();
     targetFrameTime = 1.0 / targetFps;
@@ -1237,25 +1290,22 @@ void MonitorTest::reportFps() {
         };
         auto dynamicName = [&](int idx)->std::string {
             switch (idx) {
-                case 0: return language==Language::ZH? "动态: 渐变+噪声" : "Dyn: Gradient+Noise";
-                case 1: return language==Language::ZH? "动态: 高频噪声" : "Dyn: High-Freq Noise";
-                case 2: return language==Language::ZH? "动态: 波浪干涉" : "Dyn: Wave Interference";
-                case 3: return language==Language::ZH? "动态: 螺旋" : "Dyn: Spiral";
-                case 4: return language==Language::ZH? "动态: 棋盘扰动" : "Dyn: Checker Disturb";
-                case 5: return language==Language::ZH? "动态: 辐射彩虹" : "Dyn: Radial Rainbow";
-                case 6: return language==Language::ZH? "动态: 斜向干涉" : "Dyn: Diagonal Interf";
-                case 7: return language==Language::ZH? "动态: RGBW轮播" : "Dyn: RGBW Cycle";
-                case 8: return language==Language::ZH? "动态: 移动亮条" : "Dyn: Moving Bar";
-                case 9: return language==Language::ZH? "动态: UFO移动" : "Dyn: UFO Motion";
-                case 10: return language==Language::ZH? "动态: 1px反相闪烁" : "Dyn: 1px Temporal Flip";
-                case 11: return language==Language::ZH? "动态: Zone Plate" : "Dyn: Zone Plate";
-                case 12: return language==Language::ZH? "动态: 位平面闪烁" : "Dyn: Bit-Plane Flicker";
-                case 13: return language==Language::ZH? "动态: 彩色棋盘轮换" : "Dyn: Color Checker Cycle";
-                case 14: return language==Language::ZH? "动态: 蓝噪声滚动" : "Dyn: Blue-Noise Scroll";
-                case 15: return language==Language::ZH? "动态: 径向相位扫频" : "Dyn: Radial Phase Sweep";
-                case 16: return language==Language::ZH? "动态: 旋转楔形线" : "Dyn: Wedge Spin";
+                case 0: return language==Language::ZH? "高熵: HSV 色轮" : "HE: HSV Wheel";
+                case 1: return language==Language::ZH? "高熵: 多尺度哈希" : "HE: Multi-Scale Hash";
+                case 2: return language==Language::ZH? "高熵: 频谱混合" : "HE: Spectral Mix";
+                case 3: return language==Language::ZH? "高熵: 蓝噪声滚动" : "HE: Blue-Noise Scroll";
+                case 4: return language==Language::ZH? "高熵: 径向扰动" : "HE: Radial Turbulence";
+                case 5: return language==Language::ZH? "高熵: 区域板动态" : "HE: Zoneplate Dynamic";
+                case 6: return language==Language::ZH? "高熵: 混合场" : "HE: Mixed Field";
+                case 7: return language==Language::ZH? "高熵: HSV 全色域" : "HE: HSV Full-Gamut";
+                case 8: return language==Language::ZH? "高熵: 谱梯度混合" : "HE: Spectral Gradient";
+                case 9: return language==Language::ZH? "高熵: Lissajous 色域" : "HE: Lissajous Field";
+                case 10: return language==Language::ZH? "高熵: 位平面闪烁" : "HE: Bit-Plane Flicker";
+                case 11: return language==Language::ZH? "高熵: 色相扫动" : "HE: Hue Sweep";
+                case 12: return language==Language::ZH? "高熵: 三正弦色域" : "HE: Tri-Sine Gamut";
+                case 13: return language==Language::ZH? "高熵: YUV 扫动" : "HE: YUV Sweep";
             }
-            return language==Language::ZH? "动态图样" : "Dynamic";
+            return language==Language::ZH? "高熵" : "High-Entropy";
         };
         std::string groupStr = (config.category == Category::STATIC_GROUP) ? tr("静态图样", "Static") : tr("动态压力", "Dynamic");
         std::string patStr = (config.category == Category::STATIC_GROUP)
@@ -1384,50 +1434,40 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 break;
             }
             case GLFW_KEY_F2: {
-                test->useDynamicFrameRange = !test->useDynamicFrameRange;
-                break;
-            }
-            case GLFW_KEY_F3: {
-                test->dynamicOscillation = !test->dynamicOscillation;
-                if (!test->config.vsyncEnabled && test->useDynamicFrameRange && test->config.mode != TestMode::UNLIMITED_FPS) {
-                    // 立即切换当前动态策略
-                    test->config.mode = test->dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
-                }
-                std::cout << (test->language==Language::ZH
-                              ? (test->dynamicOscillation?"动态策略: 震荡":"动态策略: 抖动")
-                              : (test->dynamicOscillation?"Range: Oscillation":"Range: Jitter"))
-                          << std::endl;
-                break;
-            }
-            case GLFW_KEY_F4: {
-                if (test->config.mode == TestMode::UNLIMITED_FPS) {
-                    // 关闭无限制：恢复到固定/动态范围策略（不改变 VSync 开/关）
-                    if (!test->config.vsyncEnabled) {
-                        if (test->useDynamicFrameRange) {
-                            test->config.mode = test->dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
-                        } else {
-                            test->config.mode = TestMode::FIXED_FPS;
-                        }
-                    } else {
+                // Cycle pacing: Fixed -> Range -> Unlimited -> Fixed ...
+                test->pacingSelection = (test->pacingSelection + 1) % 3;
+                if (test->pacingSelection == 0) {
+                    // Fixed
+                    test->useDynamicFrameRange = false;
+                    if (test->config.mode == TestMode::UNLIMITED_FPS) {
                         test->config.mode = TestMode::FIXED_FPS;
                     }
+                    std::cout << (test->language==Language::ZH?"帧率策略: 固定":"Pacing: Fixed") << std::endl;
+                } else if (test->pacingSelection == 1) {
+                    // Range (Jitter)
+                    test->useDynamicFrameRange = true;
+                    if (!test->config.vsyncEnabled && test->config.mode != TestMode::UNLIMITED_FPS) {
+                        test->config.mode = TestMode::JITTER_FPS;
+                    }
+                    std::cout << (test->language==Language::ZH?"帧率策略: 动态范围":"Pacing: Range") << std::endl;
                 } else {
-                    // 开启无限制：需要关闭 VSync
+                    // Unlimited
+                    test->useDynamicFrameRange = false;
                     test->config.vsyncEnabled = false; glfwSwapInterval(0);
                     test->config.mode = TestMode::UNLIMITED_FPS;
+                    std::cout << (test->language==Language::ZH?"帧率策略: 无限制":"Pacing: Unlimited") << std::endl;
                 }
-                std::cout << (test->language==Language::ZH
-                              ? (test->config.mode==TestMode::UNLIMITED_FPS?"无限制帧率: 开":"无限制帧率: 关")
-                              : (test->config.mode==TestMode::UNLIMITED_FPS?"Unlimited FPS: On":"Unlimited FPS: Off"))
-                          << std::endl;
                 break;
             }
+            // F3 removed: range mode no longer switches jitter/oscillation
+            // F4 merged into F2 cycling (Fixed/Range/Unlimited)
             case GLFW_KEY_F12: {
                 test->extremeMode = !test->extremeMode;
                 if (test->extremeMode) {
                     test->config.vsyncEnabled = false; glfwSwapInterval(0);
                     test->minimalOverlay = true;
                     test->useDynamicFrameRange = false; // 极限模式使用“无限制帧率”
+                    test->pacingSelection = 2; // Unlimited
                     test->config.mode = TestMode::UNLIMITED_FPS;
                     test->config.category = Category::DYNAMIC_GROUP;
                     test->config.dynamicMode = 1; // 多尺度哈希
@@ -1454,16 +1494,7 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 if (test->config.maxFps < 360) test->config.maxFps += 1;
                 break;
             }
-            case GLFW_KEY_F9: {
-                test->config.gamutMode = (test->config.gamutMode + 8 - 1) % 8;
-                std::cout << (test->language==Language::ZH?"色域: ":"Gamut: ") << test->config.gamutMode << std::endl;
-                break;
-            }
-            case GLFW_KEY_F10: {
-                test->config.gamutMode = (test->config.gamutMode + 1) % 8;
-                std::cout << (test->language==Language::ZH?"色域: ":"Gamut: ") << test->config.gamutMode << std::endl;
-                break;
-            }
+            // 色域切换已移除：动态噪声默认全色域
 
             default:
                 break;
@@ -1502,12 +1533,12 @@ void MonitorTest::printControls() const {
     #endif
     std::cout << (language==Language::ZH?"SPACE  - 切换模式组(静态/动态)":"SPACE  - Toggle group (static/dynamic)") << std::endl;
     std::cout << (language==Language::ZH?"←/→     - 上一/下一图样":"←/→     - Prev/Next pattern") << std::endl;
+    std::cout << (language==Language::ZH?"↑/↓     - 固定帧率 -/+（长按快调）":"↑/↓     - Fixed FPS -/+ (hold fast)") << std::endl;
     std::cout << (language==Language::ZH?"V      - 垂直同步 开/关":"V      - VSync On/Off") << std::endl;
     std::cout << "F1     - " << (language==Language::ZH?"精简显示 开/关":"Minimal overlay On/Off") << std::endl;
-    std::cout << "F2     - " << (language==Language::ZH?"帧率策略 固定/动态":"Pacing Fixed/Range") << std::endl;
-    std::cout << "F3     - " << (language==Language::ZH?"动态策略 抖动/震荡":"Range Jitter/Osc") << std::endl;
-    std::cout << "F4     - " << (language==Language::ZH?"无限制帧率 开/关":"Unlimited FPS On/Off") << std::endl;
-    std::cout << "F9/F10 - " << (language==Language::ZH?"色域 上一/下一":"Gamut prev/next") << std::endl;
+    std::cout << "F2     - " << (language==Language::ZH?"帧率策略 固定/动态/无限制":"Pacing Fixed/Range/Unlimited") << std::endl;
+    std::cout << "F5/F6  - " << (language==Language::ZH?"动态最小帧 -/+（长按快调）":"Range min -/+ (hold fast)") << std::endl;
+    std::cout << "F7/F8  - " << (language==Language::ZH?"动态最大帧 -/+（长按快调）":"Range max -/+ (hold fast)") << std::endl;
     std::cout << "F12    - " << (language==Language::ZH?"一键极限模式":"Extreme mode toggle") << std::endl;
     std::cout << "L      - Toggle language (ZH/EN)" << std::endl;
     std::cout << "===============\n" << std::endl;
