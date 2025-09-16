@@ -133,6 +133,32 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
         float g = sin(uv.x*141.0 - t*2.07) * sin(uv.y*149.0 + t*1.61) * 0.5 + 0.5;
         float b = sin(uv.x*163.0 + t*2.83) * sin(uv.y*127.0 - t*1.29) * 0.5 + 0.5;
         c = vec3(r,g,b);
+    } else if (variation == 10) {
+        // HSV 色轮（平滑）：角度->色相，半径->亮度
+        vec2 d = (uv - 0.5) * 2.0;
+        float h = fract((atan(d.y,d.x) / 6.2831853) + 1.0);
+        float v2 = clamp(length(d), 0.0, 1.0);
+        c = hsv2rgb(vec3(h, 0.9, 1.0 - v2*0.2));
+    } else if (variation == 11) {
+        // 时域色相扫动（平滑）：hue 随时间线性变化
+        float h = fract(uv.x + t*0.05);
+        c = hsv2rgb(vec3(h, 0.85, 0.95));
+    } else if (variation == 12) {
+        // 三正弦全色域（平滑）：相位错开 120 度
+        float ph = t*0.35;
+        float r = 0.5 + 0.5*sin(6.28318*(uv.x*0.23 + uv.y*0.31) + ph);
+        float g = 0.5 + 0.5*sin(6.28318*(uv.x*0.29 + uv.y*0.17) + ph + 2.094);
+        float b = 0.5 + 0.5*sin(6.28318*(uv.x*0.19 + uv.y*0.27) + ph + 4.188);
+        c = vec3(r,g,b);
+    } else if (variation == 13) {
+        // 伪 YUV->RGB 扫动（平滑）：Y 固定、UV 扫动
+        float Y = 0.7;
+        float U = sin(uv.x*3.0 + t*0.4)*0.5;
+        float V = sin(uv.y*3.0 - t*0.5)*0.5;
+        float R = clamp(Y + 1.13983*V, 0.0, 1.0);
+        float G = clamp(Y - 0.39465*U - 0.58060*V, 0.0, 1.0);
+        float B = clamp(Y + 2.03211*U, 0.0, 1.0);
+        c = vec3(R,G,B);
     } else {
         // 混合场（通道交错不同相位/尺度）
         float r = fract(sin(dot(p, vec2(0.251, 0.391)) + t * 2.3) * 51413.0);
@@ -484,21 +510,11 @@ void main()
         }
     } else if (uCategory == 1) {
         // DYNAMIC_GROUP: 高熵带宽压力（避免重复色块，低可压缩性，10-bit 覆盖）
-        int idx = clamp(uContentMode, 0, 9);
+        int idx = clamp(uContentMode, 0, 13);
         color = generateComplexColor(uv, uTime, idx);
     } else {
-        // AUX_GROUP: 诊断/观察型辅助图样
-        int idx = clamp(uContentMode, 0, 9);
-        if (idx == 0) color = movingBar(uv, uTime);
-        else if (idx == 1) color = ufoPattern(uv, uTime);
-        else if (idx == 2) color = temporalFlip(uv, uTime);
-        else if (idx == 3) color = zonePlate(uv, uTime);
-        else if (idx == 4) color = bitPlaneFlicker(uv, uTime);
-        else if (idx == 5) color = colorCheckerCycle(uv, uTime);
-        else if (idx == 6) color = blueNoiseScroll(uv, uTime);
-        else if (idx == 7) color = radialPhaseSweep(uv, uTime);
-        else if (idx == 8) color = wedgeSpin(uv, uTime);
-        else color = checker(uv, uTime);
+        // AUX_GROUP: test‑ufo 对标
+        color = ufoPattern(uv, uTime);
     }
 
     FragColor = vec4(color, 1.0);
@@ -803,6 +819,10 @@ void MonitorTest::renderStatusOverlay() {
             case 7: return language==Language::ZH? "高熵: HSV 全色域" : "HE: HSV Full-Gamut";
             case 8: return language==Language::ZH? "高熵: 谱梯度混合" : "HE: Spectral Gradient";
             case 9: return language==Language::ZH? "高熵: Lissajous 色域" : "HE: Lissajous Field";
+            case 10: return language==Language::ZH? "高熵: HSV 色轮" : "HE: HSV Wheel";
+            case 11: return language==Language::ZH? "高熵: 色相扫动" : "HE: Hue Sweep";
+            case 12: return language==Language::ZH? "高熵: 三正弦色域" : "HE: Tri-Sine Gamut";
+            case 13: return language==Language::ZH? "高熵: YUV 扫动" : "HE: YUV Sweep";
         }
         return language==Language::ZH? "高熵" : "High-Entropy";
     };
@@ -822,11 +842,20 @@ void MonitorTest::renderStatusOverlay() {
         return language==Language::ZH? "辅助" : "Aux";
     };
     std::string patStr;
-    if (config.category == Category::STATIC_GROUP) patStr = staticName(config.staticMode);
-    else if (config.category == Category::DYNAMIC_GROUP) patStr = dynamicName(config.dynamicMode);
-    else patStr = auxName(config.auxMode);
+    int patIdx = 0;
+    char grp = 'S';
+    if (config.category == Category::STATIC_GROUP) {
+        patIdx = config.staticMode; grp = 'S'; patStr = staticName(config.staticMode);
+    } else if (config.category == Category::DYNAMIC_GROUP) {
+        patIdx = config.dynamicMode; grp = 'D'; patStr = dynamicName(config.dynamicMode);
+    } else {
+        patIdx = config.auxMode; grp = 'A'; patStr = auxName(config.auxMode);
+    }
     leftLines.push_back({std::string(tr("模式组: ", "Group: ")) + groupStr, cr, cg, cb, false});
-    leftLines.push_back({std::string(tr("图样: ", "Pattern: ")) + patStr, cr, cg, cb, false});
+    {
+        std::ostringstream lab; lab << tr("图样: ", "Pattern: ") << "[" << grp << ":" << patIdx << "] " << patStr;
+        leftLines.push_back({lab.str(), cr, cg, cb, false});
+    }
     // 垂直同步状态
     leftLines.push_back({std::string(tr("垂直同步: ", "VSync: ")) + onOff(config.vsyncEnabled), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("目标帧率: ", "Target FPS: ")) + std::to_string(config.targetFps), cr, cg, cb, false});
@@ -868,6 +897,8 @@ void MonitorTest::renderStatusOverlay() {
     items.push_back({"F1", tr("精简显示 开/关", "Minimal overlay On/Off")});
     items.push_back({"F2", tr("帧率策略 固定/动态范围", "Pacing Fixed/Range")});
     items.push_back({"F12", tr("一键极限模式", "Extreme mode toggle")});
+    items.push_back({"F5/F6", tr("动态最小帧 -/+", "Range min -/+" )});
+    items.push_back({"F7/F8", tr("动态最大帧 -/+", "Range max -/+" )});
         items.push_back({"L", "Toggle language (ZH/EN)"});
 
         float col1W = 0.0f; float col2W = 0.0f; float rightTotalH = 0.0f;
@@ -1185,10 +1216,10 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                     test->config.staticMode = (test->config.staticMode + 1) % 21;
                     std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
                 } else if (test->config.category == Category::DYNAMIC_GROUP) {
-                    test->config.dynamicMode = (test->config.dynamicMode + 1) % 10;
+                    test->config.dynamicMode = (test->config.dynamicMode + 1) % 14;
                     std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
                 } else {
-                    test->config.auxMode = (test->config.auxMode + 1) % 10;
+                    test->config.auxMode = 0; // 仅 UFO
                     std::cout << (test->language==Language::ZH?"辅助图样索引: ":"Aux index: ") << test->config.auxMode << std::endl;
                 }
                 break;
@@ -1199,10 +1230,10 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                     test->config.staticMode = (test->config.staticMode + 21 - 1) % 21;
                     std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
                 } else if (test->config.category == Category::DYNAMIC_GROUP) {
-                    test->config.dynamicMode = (test->config.dynamicMode + 10 - 1) % 10;
+                    test->config.dynamicMode = (test->config.dynamicMode + 14 - 1) % 14;
                     std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
                 } else {
-                    test->config.auxMode = (test->config.auxMode + 10 - 1) % 10;
+                    test->config.auxMode = 0; // 仅 UFO
                     std::cout << (test->language==Language::ZH?"辅助图样索引: ":"Aux index: ") << test->config.auxMode << std::endl;
                 }
                 break;
@@ -1244,6 +1275,24 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                     test->config.minFps = 30; test->config.maxFps = 240;
                 }
                 std::cout << (test->extremeMode?"Extreme: ON":"Extreme: OFF") << std::endl;
+                break;
+            }
+
+            case GLFW_KEY_F5: {
+                if (test->config.minFps > 10) test->config.minFps -= 1;
+                if (test->config.minFps >= test->config.maxFps) test->config.minFps = test->config.maxFps - 1;
+                break;
+            }
+            case GLFW_KEY_F6: {
+                if (test->config.minFps < test->config.maxFps-1) test->config.minFps += 1;
+                break;
+            }
+            case GLFW_KEY_F7: {
+                if (test->config.maxFps > test->config.minFps+1) test->config.maxFps -= 1;
+                break;
+            }
+            case GLFW_KEY_F8: {
+                if (test->config.maxFps < 360) test->config.maxFps += 1;
                 break;
             }
 
