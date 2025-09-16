@@ -16,11 +16,12 @@ English version: see `README.md`.
 
 ## 图样分组
 - 静态图样：彩条、灰阶渐变、16 阶灰条、细/粗棋盘格、32px/8px 网格、RGB 竖条、十字+三分线、纯黑/白/红/绿/蓝、50% 灰、Siemens Star、水平/垂直楔形、同心圆环、点栅格、Gamma Checker。
-- 动态压力：多种高熵内容变体、RGBW 轮播、移动亮条、UFO 风格运动、1px 棋盘反相闪烁、Zone Plate、位平面闪烁（10-bit）、彩色棋盘轮换、蓝噪声滚动、径向相位扫频、旋转楔形线。
+- 动态压力（高熵、10‑bit）：通道哈希、多尺度哈希、频谱混合、蓝噪声滚动、径向扰动、区域板动态、混合场。输出按 10‑bit（0..1023）量化，覆盖色域广、可压缩性低。
 
 ## 技术要点
-- 面向 10-bit 色深（每通道 0–1023），避免可压缩内容，最大化带宽利用。
-- 便于暴露 handshake 重协商、DSC/VRR/G-Sync 等边界问题。
+- 高熵动态图样：覆盖范围广、低可压缩性，最大化链路带宽占用。
+- 10‑bit 量化（每通道 0..1023），充分利用深色深传输。
+- VRR 测试：在关闭 VSync 时切换帧率策略（固定/动态范围：抖动/震荡）。
 
 ## 构建
 - Linux（Debug）：`cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Debug && cmake --build build-linux -j`
@@ -33,15 +34,14 @@ English version: see `README.md`.
 - Linux：`build-linux/display_hardware_test`
 - Windows：`build-windows/display_hardware_test.exe`
 
-## 控制按键
 - `ESC`：退出
-- `P`：暂停/继续
 - `SPACE`：切换分组（静态/动态）
 - `←/→`：上一/下一图样
-- `V`：垂直同步开关
-- `A`：自动轮播开关；`[`/`]`：轮播间隔 -/+ 1s
-- `K`：截图保存（PPM，保存至 `dist/screenshots/`）
-- `T`：日志开关（CSV，保存至 `dist/logs/`）
+- `V`：垂直同步 开/关（Windows 支持）
+- `F1`：精简显示 开/关（仅显示 FPS）
+- `F2`：帧率策略 固定/动态范围（VSync 关闭时）
+- `F3`：动态范围 抖动/震荡（VSync 关闭时）
+- `L`：切换语言（ZH/EN）
 
 ## 依赖
 - 操作系统：Linux 或 Windows（Windows 版本可在 Linux 上交叉编译）

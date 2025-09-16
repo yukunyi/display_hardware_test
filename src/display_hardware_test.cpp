@@ -53,89 +53,98 @@ uniform int uColorVariation;
 uniform int uContentMode;
 uniform int uCategory; // 0: STATIC, 1: DYNAMIC
 
-// 生成高复杂度、不可压缩的颜色内容
+// 10-bit 量化（0..1023）
+float q10(float v) { return clamp(floor(clamp(v,0.0,1.0) * 1023.0 + 0.5) / 1023.0, 0.0, 1.0); }
+
+vec3 hsv2rgb(vec3 c){
+    vec3 p = abs(fract(vec3(c.x,c.x,c.x) + vec3(0.0,2.0/3.0,1.0/3.0)) * 6.0 - 3.0);
+    vec3 rgb = clamp(p - 1.0, 0.0, 1.0);
+    return c.z * mix(vec3(1.0), rgb, c.y);
+}
+
+// 高熵颜色场（避免大块重复色）
 vec3 generateComplexColor(vec2 uv, float time, int variation) {
-    // 特殊值-1用于半透明背景
-    if (variation == -1) {
-        return vec3(0.0, 0.0, 0.0); // 黑色半透明背景
-    }
-    
-    // 基础颜色计算
-    float r = uv.x;
-    float g = uv.y;
-    float b = sin(uv.x * 10.0 + uv.y * 10.0 + time) * 0.5 + 0.5;
-    
-    // 根据变化模式添加不同的扰动
-    if (variation == 1) {
-        // 高频噪声模式 - 最大化带宽使用
-        r = fract(sin(uv.x * 123.456 + time) * 43758.5453);
-        g = fract(sin(uv.y * 789.123 + time * 1.3) * 43758.5453);
-        b = fract(sin((uv.x + uv.y) * 456.789 + time * 0.7) * 43758.5453);
+    if (variation == -1) return vec3(0.0);
+    vec2 p = uv * uResolution;
+    float t = time;
+
+    // 基础哈希（避免使用纹理）
+    float h1 = fract(sin(dot(floor(p), vec2(12.9898, 78.233)) + t * 19.19) * 43758.5453);
+    float h2 = fract(sin(dot(floor(p)+13.0, vec2(39.3468, 11.135)) + t * 23.17) * 24634.6345);
+    float h3 = fract(sin(dot(floor(p)+71.0, vec2(9.154, 27.983)) + t * 29.41) * 17431.3711);
+
+    vec3 c;
+    if (variation == 0) {
+        // 独立通道哈希
+        c = vec3(h1, h2, h3);
+    } else if (variation == 1) {
+        // 多尺度哈希混合
+        vec2 p2 = p * 0.5; vec2 p3 = p * 2.7;
+        float m1 = fract(sin(dot(floor(p2), vec2(15.7, 47.3)) + t * 13.3) * 31871.1);
+        float m2 = fract(sin(dot(floor(p3), vec2(61.3, 21.9)) + t * 31.7) * 55147.3);
+        c = vec3(mix(h1, m1, 0.5), mix(h2, m2, 0.5), mix(h3, h1, 0.5));
     } else if (variation == 2) {
-        // 波浪干涉模式
-        float wave1 = sin(uv.x * 20.0 + time * 2.0);
-        float wave2 = sin(uv.y * 15.0 + time * 1.5);
-        float wave3 = sin((uv.x + uv.y) * 12.0 + time * 0.8);
-        
-        r = uv.x + wave1 * 0.3;
-        g = uv.y + wave2 * 0.3;
-        b = (wave3 + 1.0) * 0.5;
+        // 频谱混合（不公倍频率）
+        float r = fract(sin(uv.x * 123.0 + uv.y * 173.0 + t * 2.17) * 43758.3);
+        float g = fract(sin(uv.x * 231.0 + uv.y * 119.0 - t * 1.93) * 31871.7);
+        float b = fract(sin(uv.x * 199.0 + uv.y * 157.0 + t * 2.71) * 27493.9);
+        c = vec3(r,g,b);
     } else if (variation == 3) {
-        // 螺旋模式 - 创建复杂的梯度
-        vec2 center = vec2(0.5, 0.5);
-        vec2 pos = uv - center;
-        float angle = atan(pos.y, pos.x);
-        float radius = length(pos);
-        
-        r = fract(angle * 3.0 / 6.28318 + time * 0.5);
-        g = fract(radius * 8.0 + time * 0.3);
-        b = fract(sin(radius * 20.0 + angle * 5.0 + time) * 0.5 + 0.5);
+        // 蓝噪声滚动
+        vec2 pp = p / 2.0 + vec2(t * 60.0, t * 47.0);
+        float n1 = fract(sin(dot(floor(pp), vec2(12.9898, 78.233))) * 43758.5453);
+        float n2 = fract(sin(dot(floor(pp + 23.0), vec2(39.3468, 11.135))) * 24634.6345);
+        float v = clamp((n1 * 0.7 + n2 * 0.3), 0.0, 1.0);
+        c = vec3(fract(v + 0.33), fract(v + 0.66), v);
     } else if (variation == 4) {
-        // 棋盘格模式 - 高对比、易触发传输极限
-        float s = 16.0 + 12.0 * sin(time * 0.7);
-        vec2 gcell = floor(uv * s);
-        float cb = mod(gcell.x + gcell.y, 2.0);
-        r = cb;
-        g = 1.0 - cb * 0.6;
-        b = cb * 0.2 + 0.3;
+        // 径向扰动 + 相位扫频
+        vec2 d = (uv - 0.5) * 2.0;
+        float r = length(d);
+        float a = atan(d.y, d.x);
+        float v = fract(sin(r * 333.0 + a * 177.0 + t * 3.0) * 32768.0);
+        c = vec3(v, fract(v + 0.37), fract(v + 0.73));
     } else if (variation == 5) {
-        // 彩虹辐射模式 - 角度/半径双通道
-        vec2 c = uv - vec2(0.5);
-        float ang = atan(c.y, c.x);
-        float rad = length(c);
-        r = 0.5 + 0.5 * sin(ang * 3.0 + time * 1.2);
-        g = 0.5 + 0.5 * sin(ang * 5.0 - time * 0.9);
-        b = 0.5 + 0.5 * sin(rad * 50.0 - time * 3.0);
-        r = mix(r, sin(rad * 20.0 + time) * 0.5 + 0.5, 0.4);
+        // 区域板动态（避免等灰）
+        vec2 d = (uv - 0.5) * 2.0;
+        float r2 = dot(d,d);
+        float base = 0.5 + 0.5 * sin(90.0 * r2 + t * 1.8);
+        c = vec3(base, fract(base + 0.31), fract(base + 0.62));
     } else if (variation == 6) {
-        // 斜向干涉条纹 - 方向性强（替代交错条纹，避免重复）
-        float s1 = sin((uv.x + uv.y) * 40.0 + time * 2.5);
-        float s2 = sin((uv.x - uv.y) * 60.0 - time * 1.7);
-        r = s1 * 0.5 + 0.5;
-        g = s2 * 0.5 + 0.5;
-        b = sin((uv.x * 8.0 + uv.y * 6.0) + time) * 0.5 + 0.5;
+        // 混合场（通道交错不同相位/尺度）
+        float r = fract(sin(dot(p, vec2(0.251, 0.391)) + t * 2.3) * 51413.0);
+        float g = fract(sin(dot(p, vec2(0.173, 0.613)) - t * 1.7) * 37199.0);
+        float b = fract(sin(dot(p, vec2(0.421, 0.287)) + t * 3.1) * 29761.0);
+        c = vec3(r,g,b);
+    } else if (variation == 7) {
+        // HSV 全色域覆盖（加入噪声以打散等色带）
+        float h = fract(uv.x + uv.y + t*0.11 + h1*0.07);
+        float s = clamp(0.7 + (h2-0.5)*0.6, 0.2, 1.0);
+        float v = clamp(0.7 + (h3-0.5)*0.6, 0.2, 1.0);
+        c = hsv2rgb(vec3(h,s,v));
+    } else if (variation == 8) {
+        // 谱梯度混合（覆盖 RGB 基色到互补色）
+        float w = fract(uv.x*0.37 + uv.y*0.41 + t*0.23);
+        vec3 a = vec3(1.0, 0.0, 0.5);
+        vec3 b2 = vec3(0.0, 1.0, 1.0);
+        vec3 m = mix(a, b2, w);
+        c = vec3(fract(m.r + h1*0.2), fract(m.g + h2*0.2), fract(m.b + h3*0.2));
+    } else if (variation == 9) {
+        // Lissajous 色域轨迹（叠加噪声防止重复块）
+        float r = sin(uv.x*157.0 + t*2.31) * sin(uv.y*133.0 - t*1.77) * 0.5 + 0.5;
+        float g = sin(uv.x*141.0 - t*2.07) * sin(uv.y*149.0 + t*1.61) * 0.5 + 0.5;
+        float b = sin(uv.x*163.0 + t*2.83) * sin(uv.y*127.0 - t*1.29) * 0.5 + 0.5;
+        c = vec3(r,g,b);
     } else {
-        // 默认模式(0) - 渐变+独立扰动
-        r = uv.x + sin(time * 0.7) * 0.1;
-        g = uv.y + sin(time * 1.1) * 0.1;
-        b = sin(uv.x * 8.0 + uv.y * 6.0 + time) * 0.5 + 0.5;
+        // 混合场（通道交错不同相位/尺度）
+        float r = fract(sin(dot(p, vec2(0.251, 0.391)) + t * 2.3) * 51413.0);
+        float g = fract(sin(dot(p, vec2(0.173, 0.613)) - t * 1.7) * 37199.0);
+        float b = fract(sin(dot(p, vec2(0.421, 0.287)) + t * 3.1) * 29761.0);
+        c = vec3(r,g,b);
     }
-    
-    // 添加高频细节，避免相邻像素颜色相同
-    vec2 pixelPos = uv * uResolution;
-    float noise = fract(sin(dot(pixelPos, vec2(12.9898, 78.233)) + time) * 43758.5453);
-    
-    // 轻微扰动，确保每个像素都不同
-    r += noise * 0.01;
-    g += noise * 0.007;
-    b += noise * 0.013;
-    
-    // 确保在[0,1]范围内，同时利用10bit精度
-    r = clamp(fract(r), 0.0, 1.0);
-    g = clamp(fract(g), 0.0, 1.0);
-    b = clamp(fract(b), 0.0, 1.0);
-    
-    return vec3(r, g, b);
+
+    // 10-bit 量化，降低压缩可预测性同时确保位深覆盖
+    c = vec3(q10(c.r), q10(c.g), q10(c.b));
+    return c;
 }
 
 // 简化SMPTE彩条（横向8等分）
@@ -474,38 +483,23 @@ void main()
         } else {
             color = vec3(0.0);
         }
+    } else if (uCategory == 1) {
+        // DYNAMIC_GROUP: 高熵带宽压力（避免重复色块，低可压缩性，10-bit 覆盖）
+        int idx = clamp(uContentMode, 0, 9);
+        color = generateComplexColor(uv, uTime, idx);
     } else {
-        // DYNAMIC_GROUP: 带宽/帧率压力
-        // 0..6: generateComplexColor 各变体（去重后）；7: RGBW轮播；8: 移动亮条
-        // 9: UFO风格移动；10: 1px棋盘反相闪烁；11: Zone Plate
-        // 12: 位平面闪烁；13: 彩色棋盘轮换；14: 蓝噪声滚动
-        // 15: 径向相位扫频；16: 旋转楔形线
-        int idx = uContentMode;
-        if (idx <= 6) {
-            color = generateComplexColor(uv, uTime, idx);
-        } else if (idx == 7) {
-            color = rgbwCycle(uTime);
-        } else if (idx == 8) {
-            color = movingBar(uv, uTime);
-        } else if (idx == 9) {
-            color = ufoPattern(uv, uTime);
-        } else if (idx == 10) {
-            color = temporalFlip(uv, uTime);
-        } else if (idx == 11) {
-            color = zonePlate(uv, uTime);
-        } else if (idx == 12) {
-            color = bitPlaneFlicker(uv, uTime);
-        } else if (idx == 13) {
-            color = colorCheckerCycle(uv, uTime);
-        } else if (idx == 14) {
-            color = blueNoiseScroll(uv, uTime);
-        } else if (idx == 15) {
-            color = radialPhaseSweep(uv, uTime);
-        } else if (idx == 16) {
-            color = wedgeSpin(uv, uTime);
-        } else {
-            color = generateComplexColor(uv, uTime, 0);
-        }
+        // AUX_GROUP: 诊断/观察型辅助图样
+        int idx = clamp(uContentMode, 0, 9);
+        if (idx == 0) color = movingBar(uv, uTime);
+        else if (idx == 1) color = ufoPattern(uv, uTime);
+        else if (idx == 2) color = temporalFlip(uv, uTime);
+        else if (idx == 3) color = zonePlate(uv, uTime);
+        else if (idx == 4) color = bitPlaneFlicker(uv, uTime);
+        else if (idx == 5) color = colorCheckerCycle(uv, uTime);
+        else if (idx == 6) color = blueNoiseScroll(uv, uTime);
+        else if (idx == 7) color = radialPhaseSweep(uv, uTime);
+        else if (idx == 8) color = wedgeSpin(uv, uTime);
+        else color = checker(uv, uTime);
     }
 
     FragColor = vec4(color, 1.0);
@@ -675,10 +669,11 @@ void MonitorTest::setupShaders() {
                            "No suitable system font found; please install common CJK or Western fonts.")
                       << std::endl;
         } else {
-            if (!textRenderer->LoadFont(fontPath, 24)) {
+            int px = std::clamp(windowHeight / 90, 16, 40);
+            if (!textRenderer->LoadFont(fontPath, px)) {
                 std::cerr << tr("加载字体失败: ", "Failed to load font: ") << fontPath << std::endl;
             } else {
-                std::cout << tr("已加载字体: ", "Loaded font: ") << fontPath << std::endl;
+                std::cout << tr("已加载字体: ", "Loaded font: ") << fontPath << " (" << px << "px)" << std::endl;
             }
         }
     }
@@ -717,7 +712,12 @@ void MonitorTest::renderStatusOverlay() {
     std::vector<Line> leftLines;
     // 配色：标题高对比、正文近白
     const float cr = 0.92f, cg = 0.94f, cb = 0.96f; // 正文颜色
-    leftLines.push_back({tr("GPU 信息", "GPU Info"), 0.30f, 0.95f, 0.50f, false});
+    if (minimalOverlay) {
+        std::ostringstream oss;
+        oss << "FPS: " << static_cast<int>(currentFps);
+        leftLines.push_back({oss.str(), 1.0f, 1.0f, 1.0f, false});
+    } else {
+        leftLines.push_back({tr("GPU 信息", "GPU Info"), 0.30f, 0.95f, 0.50f, false});
     std::string glVersion = std::string(tr("OpenGL 版本: ", "OpenGL: ")) + toSafeString(glGetString(GL_VERSION));
     std::string glVendor  = std::string(tr("显卡厂商: ", "Vendor: ")) + toSafeString(glGetString(GL_VENDOR));
     std::string glRend    = std::string(tr("显卡型号: ", "Renderer: ")) + toSafeString(glGetString(GL_RENDERER));
@@ -748,11 +748,30 @@ void MonitorTest::renderStatusOverlay() {
     std::ostringstream ft;
     ft << std::fixed << std::setprecision(2)
        << (language == Language::ZH ? "帧时间: " : "Frame time: ")
-       << frameTimeMs << (language == Language::ZH ? " ms  (目标: " : " ms  (Target: ")
-       << (targetFrameTime * 1000.0) << " ms)";
+       << frameTimeMs << " ms";
+    if (!(useDynamicFrameRange && !config.vsyncEnabled)) {
+        ft << (language == Language::ZH ? "  (目标: " : "  (Target: ")
+           << (targetFrameTime * 1000.0) << " ms)";
+    }
     leftLines.push_back({ft.str(), cr, cg, cb, false});
-    leftLines.push_back({std::string(tr("帧率模式: ", "Mode: ")) + modeStr, cr, cg, cb, false});
-    std::string groupStr = (config.category == Category::STATIC_GROUP) ? tr("静态图样", "Static") : tr("动态压力", "Dynamic");
+    std::string pacing;
+    if (config.vsyncEnabled) {
+        pacing = language==Language::ZH ? "帧率策略: 垂直同步" : "Pacing: VSync";
+    } else {
+        if (useDynamicFrameRange) {
+            const char* dyn = (dynamicFrameMode == TestMode::JITTER_FPS)
+                ? (language==Language::ZH?"抖动":"Jitter")
+                : (language==Language::ZH?"震荡":"Osc");
+            pacing = std::string(language==Language::ZH?"帧率策略: 动态范围 (":"Pacing: Range (") + dyn + ")";
+        } else {
+            pacing = language==Language::ZH ? "帧率策略: 固定" : "Pacing: Fixed";
+        }
+    }
+    leftLines.push_back({pacing, cr, cg, cb, false});
+    std::string groupStr;
+    if (config.category == Category::STATIC_GROUP) groupStr = tr("静态图样", "Static");
+    else if (config.category == Category::DYNAMIC_GROUP) groupStr = tr("动态高熵", "High-Entropy");
+    else groupStr = tr("辅助诊断", "Auxiliary");
     auto staticName = [&](int idx)->std::string {
         switch (idx) {
             case 0: return language==Language::ZH? "彩条" : "Color Bars";
@@ -781,37 +800,45 @@ void MonitorTest::renderStatusOverlay() {
     };
     auto dynamicName = [&](int idx)->std::string {
         switch (idx) {
-            case 0: return language==Language::ZH? "动态: 渐变+噪声" : "Dyn: Gradient+Noise";
-            case 1: return language==Language::ZH? "动态: 高频噪声" : "Dyn: High-Freq Noise";
-            case 2: return language==Language::ZH? "动态: 波浪干涉" : "Dyn: Wave Interference";
-            case 3: return language==Language::ZH? "动态: 螺旋" : "Dyn: Spiral";
-            case 4: return language==Language::ZH? "动态: 棋盘扰动" : "Dyn: Checker Disturb";
-            case 5: return language==Language::ZH? "动态: 辐射彩虹" : "Dyn: Radial Rainbow";
-            case 6: return language==Language::ZH? "动态: 斜向干涉" : "Dyn: Diagonal Interf";
-            case 7: return language==Language::ZH? "动态: RGBW轮播" : "Dyn: RGBW Cycle";
-            case 8: return language==Language::ZH? "动态: 移动亮条" : "Dyn: Moving Bar";
-            case 9: return language==Language::ZH? "动态: UFO移动" : "Dyn: UFO Motion";
-            case 10: return language==Language::ZH? "动态: 1px反相闪烁" : "Dyn: 1px Temporal Flip";
-            case 11: return language==Language::ZH? "动态: Zone Plate" : "Dyn: Zone Plate";
-            case 12: return language==Language::ZH? "动态: 位平面闪烁" : "Dyn: Bit-Plane Flicker";
-            case 13: return language==Language::ZH? "动态: 彩色棋盘轮换" : "Dyn: Color Checker Cycle";
-            case 14: return language==Language::ZH? "动态: 蓝噪声滚动" : "Dyn: Blue-Noise Scroll";
-            case 15: return language==Language::ZH? "动态: 径向相位扫频" : "Dyn: Radial Phase Sweep";
-            case 16: return language==Language::ZH? "动态: 旋转楔形线" : "Dyn: Wedge Spin";
+            case 0: return language==Language::ZH? "高熵: 通道哈希" : "HE: Channel Hash";
+            case 1: return language==Language::ZH? "高熵: 多尺度哈希" : "HE: Multi-Scale Hash";
+            case 2: return language==Language::ZH? "高熵: 频谱混合" : "HE: Spectral Mix";
+            case 3: return language==Language::ZH? "高熵: 蓝噪声滚动" : "HE: Blue-Noise Scroll";
+            case 4: return language==Language::ZH? "高熵: 径向扰动" : "HE: Radial Turbulence";
+            case 5: return language==Language::ZH? "高熵: 区域板动态" : "HE: Zoneplate Dynamic";
+            case 6: return language==Language::ZH? "高熵: 混合场" : "HE: Mixed Field";
+            case 7: return language==Language::ZH? "高熵: HSV 全色域" : "HE: HSV Full-Gamut";
+            case 8: return language==Language::ZH? "高熵: 谱梯度混合" : "HE: Spectral Gradient";
+            case 9: return language==Language::ZH? "高熵: Lissajous 色域" : "HE: Lissajous Field";
         }
-        return language==Language::ZH? "动态图样" : "Dynamic";
+        return language==Language::ZH? "高熵" : "High-Entropy";
     };
-    std::string patStr = (config.category == Category::STATIC_GROUP)
-        ? staticName(config.staticMode)
-        : dynamicName(config.dynamicMode);
+    auto auxName = [&](int idx)->std::string {
+        switch (idx) {
+            case 0: return language==Language::ZH? "辅助: 移动亮条" : "Aux: Moving Bar";
+            case 1: return language==Language::ZH? "辅助: UFO 运动" : "Aux: UFO Motion";
+            case 2: return language==Language::ZH? "辅助: 1px 反相" : "Aux: 1px Temporal Flip";
+            case 3: return language==Language::ZH? "辅助: Zone Plate" : "Aux: Zone Plate";
+            case 4: return language==Language::ZH? "辅助: 位平面闪烁" : "Aux: Bit-Plane Flicker";
+            case 5: return language==Language::ZH? "辅助: 彩色棋盘轮换" : "Aux: Color Checker Cycle";
+            case 6: return language==Language::ZH? "辅助: 蓝噪声滚动" : "Aux: Blue-Noise Scroll";
+            case 7: return language==Language::ZH? "辅助: 径向扫频" : "Aux: Radial Sweep";
+            case 8: return language==Language::ZH? "辅助: 旋转楔形" : "Aux: Wedge Spin";
+            case 9: return language==Language::ZH? "辅助: 粗棋盘" : "Aux: Checker Coarse";
+        }
+        return language==Language::ZH? "辅助" : "Aux";
+    };
+    std::string patStr;
+    if (config.category == Category::STATIC_GROUP) patStr = staticName(config.staticMode);
+    else if (config.category == Category::DYNAMIC_GROUP) patStr = dynamicName(config.dynamicMode);
+    else patStr = auxName(config.auxMode);
     leftLines.push_back({std::string(tr("模式组: ", "Group: ")) + groupStr, cr, cg, cb, false});
     leftLines.push_back({std::string(tr("图样: ", "Pattern: ")) + patStr, cr, cg, cb, false});
     // 垂直同步状态
     leftLines.push_back({std::string(tr("垂直同步: ", "VSync: ")) + onOff(config.vsyncEnabled), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("目标帧率: ", "Target FPS: ")) + std::to_string(config.targetFps), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("范围: ", "Range: ")) + std::to_string(config.minFps) + "~" + std::to_string(config.maxFps), cr, cg, cb, config.isPaused});
-    if (config.isPaused) {
-        leftLines.push_back({tr("状态: 已暂停", "Status: Paused"), 1.0f, 0.2f, 0.2f, false});
+    if (config.isPaused) leftLines.push_back({tr("状态: 已暂停", "Status: Paused"), 1.0f, 0.2f, 0.2f, false});
     }
 
     float leftMaxW = 0.0f; float leftTotalH = 0.0f; float leftGaps = 0.0f;
@@ -827,41 +854,79 @@ void MonitorTest::renderStatusOverlay() {
     GLint panelW = static_cast<GLint>(std::ceil(leftMaxW + padding * 2));
     GLint panelH = static_cast<GLint>(std::ceil(leftContentH + padding * 2));
 
-    // 右侧控制说明
-    std::vector<std::string> rightTexts;
-    rightTexts.push_back(tr("控制说明", "Controls"));
-    rightTexts.push_back(tr("ESC   - 退出程序", "ESC   - Exit"));
-#ifndef _WIN32
-    rightTexts.push_back(tr("P     - 暂停/继续", "P     - Pause/Resume"));
-    rightTexts.push_back(tr("V     - 垂直同步 开/关", "V     - VSync On/Off"));
-    rightTexts.push_back(tr("K     - 截图保存 (PPM)", "K     - Save screenshot (PPM)"));
-    rightTexts.push_back("L     - Toggle language (ZH/EN)");
-#endif
-    rightTexts.push_back(tr("SPACE - 切换模式组", "SPACE - Toggle group"));
-    rightTexts.push_back(tr("←/→   - 上一/下一图样", "←/→   - Prev/Next pattern"));
-    float rightMaxW = 0.0f; float rightTotalH = 0.0f;
-    for (const auto& s : rightTexts) {
-        float w = textRenderer ? textRenderer->MeasureTextWidth(s, scale) : static_cast<float>(s.size() * 10);
-        if (w > rightMaxW) rightMaxW = w;
-        rightTotalH += lh;
-    }
-    float rightContentH = asc + (static_cast<int>(rightTexts.size()) > 0 ? (static_cast<int>(rightTexts.size()) - 1) * lh : 0.0f) + desc;
-    GLint rightW = static_cast<GLint>(std::ceil(rightMaxW + padding * 2));
-    GLint rightH = static_cast<GLint>(std::ceil(rightContentH + padding * 2));
-    GLint rightX = windowWidth - (rightW + static_cast<GLint>(margin));
-    GLint rightY = windowHeight - (rightH + static_cast<GLint>(topMargin));
-
-    // 绘制左/右背景面板
+    // 绘制左面板背景
     glViewport(static_cast<GLint>(margin), windowHeight - (panelH + static_cast<GLint>(topMargin)), panelW, panelH);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    glViewport(rightX, rightY, rightW, rightH);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-    // 恢复完整视口
+    // 可选绘制右面板
+    GLint rightX = 0, rightY = 0, rightW = 0, rightH = 0;
+    if (!minimalOverlay) {
+        // 右侧控制说明（两列对齐渲染）
+        struct CtrlItem { std::string key; std::string desc; };
+        std::vector<CtrlItem> items;
+        items.push_back({"", tr("控制说明", "Controls")});
+        items.push_back({"ESC", tr("退出程序", "Exit")});
+#ifndef _WIN32
+        items.push_back({"P", tr("暂停/继续", "Pause/Resume")});
+#endif
+        items.push_back({"SPACE", tr("切换模式组", "Toggle group")});
+        items.push_back({"←/→", tr("上一/下一图样", "Prev/Next pattern")});
+        items.push_back({"V", tr("垂直同步 开/关", "VSync On/Off")});
+    items.push_back({"F1", tr("精简显示 开/关", "Minimal overlay On/Off")});
+    items.push_back({"F2", tr("帧率策略 固定/动态", "Pacing Fixed/Range")});
+    items.push_back({"F3", tr("动态策略 抖动/震荡", "Range Jitter/Osc")});
+    items.push_back({"F12", tr("一键极限模式", "Extreme mode toggle")});
+        items.push_back({"L", "Toggle language (ZH/EN)"});
+
+        float col1W = 0.0f; float col2W = 0.0f; float rightTotalH = 0.0f;
+        for (const auto& it : items) {
+            float w1 = textRenderer ? textRenderer->MeasureTextWidth(it.key, scale) : static_cast<float>(it.key.size() * 10);
+            float w2 = textRenderer ? textRenderer->MeasureTextWidth(it.desc, scale) : static_cast<float>(it.desc.size() * 10);
+            if (w1 > col1W) col1W = w1;
+            if (w2 > col2W) col2W = w2;
+            rightTotalH += lh;
+        }
+        float gap = 16.0f;
+        float rightMaxW = col1W + (col1W>0?gap:0) + col2W;
+        float rightContentH = asc + (static_cast<int>(items.size()) > 0 ? (static_cast<int>(items.size()) - 1) * lh : 0.0f) + desc;
+        rightW = static_cast<GLint>(std::ceil(rightMaxW + padding * 2));
+        rightH = static_cast<GLint>(std::ceil(rightContentH + padding * 2));
+        rightX = windowWidth - (rightW + static_cast<GLint>(margin));
+        rightY = windowHeight - (rightH + static_cast<GLint>(topMargin));
+
+        glViewport(rightX, rightY, rightW, rightH);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+        // 恢复完整视口后绘制右侧文本（确保与左侧相同像素坐标映射与字号）
+        glViewport(0, 0, windowWidth, windowHeight);
+        glBindVertexArray(0);
+
+        // 文本内容（右侧两列）
+        if (textRenderer) {
+            float rx = static_cast<float>(rightX) + padding;
+            float ry = topMargin + padding + asc;
+            for (size_t i = 0; i < items.size(); ++i) {
+                const auto& it = items[i];
+                if (i == 0) {
+                    textRenderer->RenderText(it.desc, rx, ry, scale, 1.0f, 0.90f, 0.40f);
+                } else {
+                    float x2 = rx;
+                    if (!it.key.empty()) {
+                        textRenderer->RenderText(it.key, rx, ry, scale, cr, cg, cb);
+                        x2 = rx + col1W + gap;
+                    }
+                    textRenderer->RenderText(it.desc, x2, ry, scale, cr, cg, cb);
+                }
+                ry += lh;
+            }
+        }
+    }
+
+    // 恢复完整视口（左侧文本绘制所需；右侧已在绘制前重置）
     glViewport(0, 0, windowWidth, windowHeight);
     glBindVertexArray(0);
 
-    // 文本内容（UTF-8，Windows/Linux中文均可）
+    // 文本内容（左侧）
     if (textRenderer) {
         float x = margin + padding;
         float y = topMargin + padding + asc; // 顶部保持 padding 到字形顶部
@@ -869,18 +934,6 @@ void MonitorTest::renderStatusOverlay() {
             textRenderer->RenderText(ln.txt, x, y, scale, ln.r, ln.g, ln.b);
             y += lh;
             if (ln.extraGap) y += 8.0f;
-        }
-
-        float rx = static_cast<float>(rightX) + padding;
-        float ry = topMargin + padding + asc;
-        // 右侧标题颜色与正文颜色
-        for (size_t i = 0; i < rightTexts.size(); ++i) {
-            if (i == 0) {
-                textRenderer->RenderText(rightTexts[i], rx, ry, scale, 1.0f, 0.90f, 0.40f);
-            } else {
-                textRenderer->RenderText(rightTexts[i], rx, ry, scale, cr, cg, cb);
-            }
-            ry += lh;
         }
     }
 
@@ -944,12 +997,12 @@ void MonitorTest::render() {
     shader->setFloat("uTime", static_cast<float>(currentTime));
     shader->setVec2("uResolution", static_cast<float>(windowWidth), static_cast<float>(windowHeight));
     // 设置分类与子模式
-    int cat = (config.category == Category::STATIC_GROUP) ? 0 : 1;
-    int sub = (cat == 0) ? config.staticMode : config.dynamicMode;
+    int cat = (config.category == Category::STATIC_GROUP) ? 0 : ((config.category == Category::DYNAMIC_GROUP) ? 1 : 2);
+    int sub = (cat == 0) ? config.staticMode : ((cat==1)? config.dynamicMode : config.auxMode);
     shader->setInt("uCategory", cat);
     shader->setInt("uContentMode", sub);
     // 动态复杂内容的子变体（用于 generateComplexColor）
-    int dynVar = (cat == 1 && sub <= 6) ? sub : 0;
+    int dynVar = (cat == 1) ? sub : 0;
     shader->setInt("uColorVariation", dynVar);
     // 无参数传递（已去掉可调参数）
     
@@ -958,7 +1011,7 @@ void MonitorTest::render() {
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
     
-    // 渲染状态覆盖层
+    // 渲染状态覆盖层（精简显示时减少绘制）
     renderStatusOverlay();
 }
 
@@ -969,6 +1022,13 @@ void MonitorTest::handleInput() {
 }
 
 void MonitorTest::updateFrameRate() {
+    if (!config.vsyncEnabled) {
+        if (useDynamicFrameRange) {
+            config.mode = dynamicFrameMode;
+        } else {
+            config.mode = TestMode::FIXED_FPS;
+        }
+    }
     double targetFps = calculateTargetFps();
     targetFrameTime = 1.0 / targetFps;
 }
@@ -1118,49 +1178,46 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
 #endif
 
             case GLFW_KEY_SPACE: {
-                // 切换模式组（静态/动态）
-                test->config.category = (test->config.category == Category::STATIC_GROUP)
-                    ? Category::DYNAMIC_GROUP : Category::STATIC_GROUP;
+                // 轮换模式组（静态 -> 动态 -> 辅助 -> 静态）
+                if (test->config.category == Category::STATIC_GROUP) test->config.category = Category::DYNAMIC_GROUP;
+                else if (test->config.category == Category::DYNAMIC_GROUP) test->config.category = Category::AUX_GROUP;
+                else test->config.category = Category::STATIC_GROUP;
                 std::cout << (test->language==Language::ZH ? "模式组: " : "Group: ")
                           << (test->config.category == Category::STATIC_GROUP ? (test->language==Language::ZH?"静态图样":"Static")
-                                                                               : (test->language==Language::ZH?"动态压力":"Dynamic"))
+                              : (test->config.category == Category::DYNAMIC_GROUP ? (test->language==Language::ZH?"动态高熵":"High-Entropy")
+                              : (test->language==Language::ZH?"辅助诊断":"Auxiliary")))
                           << std::endl;
                 break;
             }
 
             case GLFW_KEY_RIGHT: {
-                bool isStatic = (test->config.category == Category::STATIC_GROUP);
-                if (isStatic) {
+                if (test->config.category == Category::STATIC_GROUP) {
                     test->config.staticMode = (test->config.staticMode + 1) % 21;
                     std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
-                } else {
-                    test->config.dynamicMode = (test->config.dynamicMode + 1) % 17;
+                } else if (test->config.category == Category::DYNAMIC_GROUP) {
+                    test->config.dynamicMode = (test->config.dynamicMode + 1) % 10;
                     std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
+                } else {
+                    test->config.auxMode = (test->config.auxMode + 1) % 10;
+                    std::cout << (test->language==Language::ZH?"辅助图样索引: ":"Aux index: ") << test->config.auxMode << std::endl;
                 }
                 break;
             }
 
             case GLFW_KEY_LEFT: {
-                bool isStatic = (test->config.category == Category::STATIC_GROUP);
-                if (isStatic) {
+                if (test->config.category == Category::STATIC_GROUP) {
                     test->config.staticMode = (test->config.staticMode + 21 - 1) % 21;
                     std::cout << (test->language==Language::ZH?"静态图样索引: ":"Static index: ") << test->config.staticMode << std::endl;
-                } else {
-                    test->config.dynamicMode = (test->config.dynamicMode + 17 - 1) % 17;
+                } else if (test->config.category == Category::DYNAMIC_GROUP) {
+                    test->config.dynamicMode = (test->config.dynamicMode + 10 - 1) % 10;
                     std::cout << (test->language==Language::ZH?"动态图样索引: ":"Dynamic index: ") << test->config.dynamicMode << std::endl;
+                } else {
+                    test->config.auxMode = (test->config.auxMode + 10 - 1) % 10;
+                    std::cout << (test->language==Language::ZH?"辅助图样索引: ":"Aux index: ") << test->config.auxMode << std::endl;
                 }
                 break;
             }
 
-#ifndef _WIN32
-            case GLFW_KEY_K: {
-                bool ok = test->saveScreenshot();
-                std::cout << (ok ? (test->language==Language::ZH?"截图已保存":"Screenshot saved")
-                                   : (test->language==Language::ZH?"截图失败":"Screenshot failed"))
-                          << std::endl;
-                break;
-            }
-#endif
 
             case GLFW_KEY_V: {
                 test->config.vsyncEnabled = !test->config.vsyncEnabled;
@@ -1178,6 +1235,34 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 break;
             }
 
+            case GLFW_KEY_F1: {
+                test->minimalOverlay = !test->minimalOverlay;
+                break;
+            }
+            case GLFW_KEY_F2: {
+                test->useDynamicFrameRange = !test->useDynamicFrameRange;
+                break;
+            }
+            case GLFW_KEY_F3: {
+                test->dynamicFrameMode = (test->dynamicFrameMode == TestMode::JITTER_FPS)
+                    ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
+                break;
+            }
+            case GLFW_KEY_F12: {
+                test->extremeMode = !test->extremeMode;
+                if (test->extremeMode) {
+                    test->config.vsyncEnabled = false; glfwSwapInterval(0);
+                    test->minimalOverlay = true;
+                    test->useDynamicFrameRange = true;
+                    test->dynamicFrameMode = TestMode::JITTER_FPS;
+                    test->config.category = Category::DYNAMIC_GROUP;
+                    test->config.dynamicMode = 1; // 多尺度哈希
+                    test->config.minFps = 30; test->config.maxFps = 240; // 供范围策略使用
+                }
+                std::cout << (test->extremeMode?"Extreme: ON":"Extreme: OFF") << std::endl;
+                break;
+            }
+
             default:
                 break;
         }
@@ -1191,45 +1276,21 @@ void MonitorTest::framebufferSizeCallback(GLFWwindow* window, int width, int hei
     if (!test) return;
     test->windowWidth = width;
     test->windowHeight = height;
-    if (test->textRenderer) test->textRenderer->SetScreenSize(width, height);
+    if (test->textRenderer) {
+        test->textRenderer->SetScreenSize(width, height);
+        std::string fontPath = test->chooseFontPath();
+        if (!fontPath.empty()) {
+            int px = std::clamp(height / 90, 16, 40);
+            test->textRenderer->LoadFont(fontPath, px);
+        }
+    }
 }
 
 void MonitorTest::errorCallback(int error, const char* description) {
     std::cerr << "GLFW error " << error << ": " << description << std::endl;
 }
 
-bool MonitorTest::saveScreenshot() {
-    namespace fs = std::filesystem;
-    fs::create_directories("dist/screenshots");
-    std::vector<unsigned char> pixels;
-    pixels.resize(static_cast<size_t>(windowWidth) * static_cast<size_t>(windowHeight) * 3u);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, windowWidth, windowHeight, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-    // 写 PPM (P6)
-    auto now = std::chrono::system_clock::now();
-    auto t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char buf[64];
-    std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
-    std::string fname = std::string("dist/screenshots/shot-") + buf + ".ppm";
-    std::ofstream out(fname, std::ios::binary);
-    if (!out) return false;
-    out << "P6\n" << windowWidth << " " << windowHeight << "\n255\n";
-    // 翻转Y方向（OpenGL原点在左下）
-    const size_t rowBytes = static_cast<size_t>(windowWidth) * 3u;
-    for (int y = windowHeight - 1; y >= 0; --y) {
-        out.write(reinterpret_cast<const char*>(pixels.data() + static_cast<size_t>(y) * rowBytes), rowBytes);
-    }
-    out.close();
-    std::cout << (language==Language::ZH?"已保存截图: ":"Saved screenshot: ") << fname << std::endl;
-    return true;
-}
+ 
 
 void MonitorTest::printControls() const {
     std::cout << (language==Language::ZH?"\n=== 控制说明 ===":"\n=== Controls ===") << std::endl;
@@ -1239,11 +1300,12 @@ void MonitorTest::printControls() const {
     #endif
     std::cout << (language==Language::ZH?"SPACE  - 切换模式组(静态/动态)":"SPACE  - Toggle group (static/dynamic)") << std::endl;
     std::cout << (language==Language::ZH?"←/→     - 上一/下一图样":"←/→     - Prev/Next pattern") << std::endl;
-    #ifndef _WIN32
     std::cout << (language==Language::ZH?"V      - 垂直同步 开/关":"V      - VSync On/Off") << std::endl;
-    std::cout << (language==Language::ZH?"K      - 截图保存 (PPM)":"K      - Save screenshot (PPM)") << std::endl;
+    std::cout << "F1     - " << (language==Language::ZH?"精简显示 开/关":"Minimal overlay On/Off") << std::endl;
+    std::cout << "F2     - " << (language==Language::ZH?"帧率策略 固定/动态":"Pacing Fixed/Range") << std::endl;
+    std::cout << "F3     - " << (language==Language::ZH?"动态策略 抖动/震荡":"Range Jitter/Osc") << std::endl;
+    std::cout << "F12    - " << (language==Language::ZH?"一键极限模式":"Extreme mode toggle") << std::endl;
     std::cout << "L      - Toggle language (ZH/EN)" << std::endl;
-    #endif
     std::cout << "===============\n" << std::endl;
 }
 

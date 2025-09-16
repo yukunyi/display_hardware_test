@@ -16,11 +16,12 @@ For a Chinese version of this document, see `README_zh.md`.
 
 ## Pattern Groups
 - Static: color bars, gray gradient, 16-step gray, fine/coarse checkerboards, 32px/8px grids, RGB stripes, cross/thirds, black/white/R/G/B/50% gray, Siemens star, horizontal/vertical wedges, concentric rings, dot grid, gamma checker.
-- Dynamic: multiple high-entropy content variants, RGBW cycle, moving highlight bar, UFO motion, 1px temporal inversion, zone plate, bit-plane flicker (10-bit), color checker cycle, blue-noise scroll, radial phase sweep, wedge spin.
+- Dynamic (high-entropy, 10‑bit): channel hash, multi‑scale hash, spectral mix, blue‑noise scroll, radial turbulence, zoneplate dynamic, mixed field. All outputs quantized to 10‑bit (0..1023) to exercise deep color bandwidth and minimize compressibility.
 
 ## Tech Highlights
-- 10-bit depth friendly patterns (0–1023 per channel), designed to avoid compressibility and maximize link utilization.
-- Helps provoke handshake renegotiations and exposes DSC/VRR/G-Sync edge cases.
+- High‑entropy dynamic patterns designed for low compressibility and broad color coverage.
+- 10‑bit quantization (0..1023 per channel) to exercise deep color links.
+- VRR testing: switch pacing between Fixed and Range (Jitter/Oscillation) while VSync is Off.
 
 ## Build
 - Linux (Debug): `cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Debug && cmake --build build-linux -j`
@@ -35,13 +36,13 @@ For a Chinese version of this document, see `README_zh.md`.
 
 ## Controls
 - `ESC`: exit
-- `P`: pause/resume
 - `SPACE`: switch group (static/dynamic)
 - `LEFT/RIGHT`: previous/next pattern
-- `V`: VSync toggle
-- `A`: autoplay toggle; `[`/`]`: interval -/+ 1s
-- `K`: save screenshot (PPM to `dist/screenshots/`)
-- `T`: logging toggle (CSV to `dist/logs/`)
+- `V`: VSync On/Off (Windows supported)
+- `F1`: Minimal overlay On/Off (show FPS only)
+- `F2`: Pacing Fixed/Range (when VSync Off)
+- `F3`: Range Jitter/Oscillation (when VSync Off)
+- `L`: Toggle language (ZH/EN)
 
 ## Requirements
 - OS: Linux or Windows (cross-built on Linux via MinGW)

@@ -10,7 +10,7 @@ class Shader;
 class TextRenderer;
 
 enum class TestMode { FIXED_FPS, JITTER_FPS, OSCILLATION_FPS };
-enum class Category { STATIC_GROUP = 0, DYNAMIC_GROUP = 1 };
+enum class Category { STATIC_GROUP = 0, DYNAMIC_GROUP = 1, AUX_GROUP = 2 };
 enum class Language { ZH = 0, EN = 1 };
 
 struct TestConfig {
@@ -23,6 +23,7 @@ struct TestConfig {
     Category category = Category::DYNAMIC_GROUP;
     int staticMode = 0;
     int dynamicMode = 0;
+    int auxMode = 0;
     bool vsyncEnabled = false;
 };
 
@@ -47,8 +48,11 @@ private:
     std::unique_ptr<TextRenderer> textRenderer;
     void renderStatusOverlay();
     std::string chooseFontPath() const;
-    bool saveScreenshot();
     Language language = Language::ZH;
+    bool minimalOverlay = false;
+    bool useDynamicFrameRange = false;
+    TestMode dynamicFrameMode = TestMode::JITTER_FPS;
+    bool extremeMode = false;
 
 public:
     MonitorTest();
