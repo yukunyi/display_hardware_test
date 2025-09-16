@@ -116,18 +116,17 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
         float b = fract(sin(dot(p, vec2(0.421, 0.287)) + t * 3.1) * 29761.0);
         c = vec3(r,g,b);
     } else if (variation == 7) {
-        // HSV 全色域覆盖（加入噪声以打散等色带）
-        float h = fract(uv.x + uv.y + t*0.11 + h1*0.07);
-        float s = clamp(0.7 + (h2-0.5)*0.6, 0.2, 1.0);
-        float v = clamp(0.7 + (h3-0.5)*0.6, 0.2, 1.0);
+        // HSV 全色域覆盖（平滑，无抖动）
+        float h = fract(uv.x + uv.y + t*0.05);
+        float s = 0.9;
+        float v = 0.9;
         c = hsv2rgb(vec3(h,s,v));
     } else if (variation == 8) {
-        // 谱梯度混合（覆盖 RGB 基色到互补色）
-        float w = fract(uv.x*0.37 + uv.y*0.41 + t*0.23);
+        // 谱梯度混合（平滑，无抖动）
+        float w = fract(uv.x*0.37 + uv.y*0.41 + t*0.10);
         vec3 a = vec3(1.0, 0.0, 0.5);
         vec3 b2 = vec3(0.0, 1.0, 1.0);
-        vec3 m = mix(a, b2, w);
-        c = vec3(fract(m.r + h1*0.2), fract(m.g + h2*0.2), fract(m.b + h3*0.2));
+        c = mix(a, b2, w);
     } else if (variation == 9) {
         // Lissajous 色域轨迹（叠加噪声防止重复块）
         float r = sin(uv.x*157.0 + t*2.31) * sin(uv.y*133.0 - t*1.77) * 0.5 + 0.5;
@@ -756,16 +755,10 @@ void MonitorTest::renderStatusOverlay() {
     leftLines.push_back({ft.str(), cr, cg, cb, false});
     std::string pacing;
     if (config.vsyncEnabled) {
-        pacing = language==Language::ZH ? "帧率策略: 垂直同步" : "Pacing: VSync";
+        pacing = (language==Language::ZH?"帧率策略: 垂直同步":"Pacing: VSync");
     } else {
-        if (useDynamicFrameRange) {
-            const char* dyn = (dynamicFrameMode == TestMode::JITTER_FPS)
-                ? (language==Language::ZH?"抖动":"Jitter")
-                : (language==Language::ZH?"震荡":"Osc");
-            pacing = std::string(language==Language::ZH?"帧率策略: 动态范围 (":"Pacing: Range (") + dyn + ")";
-        } else {
-            pacing = language==Language::ZH ? "帧率策略: 固定" : "Pacing: Fixed";
-        }
+        pacing = useDynamicFrameRange ? (language==Language::ZH?"帧率策略: 动态范围":"Pacing: Range")
+                                      : (language==Language::ZH?"帧率策略: 固定":"Pacing: Fixed");
     }
     leftLines.push_back({pacing, cr, cg, cb, false});
     std::string groupStr;
@@ -873,8 +866,7 @@ void MonitorTest::renderStatusOverlay() {
         items.push_back({"←/→", tr("上一/下一图样", "Prev/Next pattern")});
         items.push_back({"V", tr("垂直同步 开/关", "VSync On/Off")});
     items.push_back({"F1", tr("精简显示 开/关", "Minimal overlay On/Off")});
-    items.push_back({"F2", tr("帧率策略 固定/动态", "Pacing Fixed/Range")});
-    items.push_back({"F3", tr("动态策略 抖动/震荡", "Range Jitter/Osc")});
+    items.push_back({"F2", tr("帧率策略 固定/动态范围", "Pacing Fixed/Range")});
     items.push_back({"F12", tr("一键极限模式", "Extreme mode toggle")});
         items.push_back({"L", "Toggle language (ZH/EN)"});
 
@@ -1023,11 +1015,9 @@ void MonitorTest::handleInput() {
 
 void MonitorTest::updateFrameRate() {
     if (!config.vsyncEnabled) {
-        if (useDynamicFrameRange) {
-            config.mode = dynamicFrameMode;
-        } else {
-            config.mode = TestMode::FIXED_FPS;
-        }
+        config.mode = useDynamicFrameRange ? TestMode::JITTER_FPS : TestMode::FIXED_FPS;
+    } else {
+        config.mode = TestMode::FIXED_FPS;
     }
     double targetFps = calculateTargetFps();
     targetFrameTime = 1.0 / targetFps;
@@ -1243,21 +1233,15 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 test->useDynamicFrameRange = !test->useDynamicFrameRange;
                 break;
             }
-            case GLFW_KEY_F3: {
-                test->dynamicFrameMode = (test->dynamicFrameMode == TestMode::JITTER_FPS)
-                    ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
-                break;
-            }
             case GLFW_KEY_F12: {
                 test->extremeMode = !test->extremeMode;
                 if (test->extremeMode) {
                     test->config.vsyncEnabled = false; glfwSwapInterval(0);
                     test->minimalOverlay = true;
                     test->useDynamicFrameRange = true;
-                    test->dynamicFrameMode = TestMode::JITTER_FPS;
                     test->config.category = Category::DYNAMIC_GROUP;
                     test->config.dynamicMode = 1; // 多尺度哈希
-                    test->config.minFps = 30; test->config.maxFps = 240; // 供范围策略使用
+                    test->config.minFps = 30; test->config.maxFps = 240;
                 }
                 std::cout << (test->extremeMode?"Extreme: ON":"Extreme: OFF") << std::endl;
                 break;

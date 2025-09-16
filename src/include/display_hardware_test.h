@@ -51,7 +51,6 @@ private:
     Language language = Language::ZH;
     bool minimalOverlay = false;
     bool useDynamicFrameRange = false;
-    TestMode dynamicFrameMode = TestMode::JITTER_FPS;
     bool extremeMode = false;
 
 public:

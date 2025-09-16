@@ -40,8 +40,7 @@ For a Chinese version of this document, see `README_zh.md`.
 - `LEFT/RIGHT`: previous/next pattern
 - `V`: VSync On/Off (Windows supported)
 - `F1`: Minimal overlay On/Off (show FPS only)
-- `F2`: Pacing Fixed/Range (when VSync Off)
-- `F3`: Range Jitter/Oscillation (when VSync Off)
+- `F12`: Extreme mode toggle
 - `L`: Toggle language (ZH/EN)
 
 ## Requirements
