@@ -9,7 +9,7 @@
 class Shader;
 class TextRenderer;
 
-enum class TestMode { FIXED_FPS, JITTER_FPS, OSCILLATION_FPS };
+enum class TestMode { FIXED_FPS, JITTER_FPS, OSCILLATION_FPS, UNLIMITED_FPS };
 enum class Category { STATIC_GROUP = 0, DYNAMIC_GROUP = 1, AUX_GROUP = 2 };
 enum class Language { ZH = 0, EN = 1 };
 
@@ -25,6 +25,7 @@ struct TestConfig {
     int dynamicMode = 0;
     int auxMode = 0;
     bool vsyncEnabled = false;
+    int gamutMode = 0; // 0=Full, 1=R, 2=G, 3=B, 4=C, 5=M, 6=Y, 7=Gray
 };
 
 class MonitorTest {
@@ -52,6 +53,8 @@ private:
     bool minimalOverlay = false;
     bool useDynamicFrameRange = false;
     bool extremeMode = false;
+    bool dynamicOscillation = false; // true=OSC, false=JITTER
+    int preferredRefreshHz = 0;      // the chosen refresh rate hint
 
 public:
     MonitorTest();

@@ -52,6 +52,7 @@ uniform vec2 uResolution;
 uniform int uColorVariation;
 uniform int uContentMode;
 uniform int uCategory; // 0: STATIC, 1: DYNAMIC
+uniform int uGamutMode; // 0: Full, 1:R, 2:G, 3:B, 4:C, 5:M, 6:Y, 7:Gray
 
 // 10-bit 量化（0..1023）
 float q10(float v) { return clamp(floor(clamp(v,0.0,1.0) * 1023.0 + 0.5) / 1023.0, 0.0, 1.0); }
@@ -60,6 +61,57 @@ vec3 hsv2rgb(vec3 c){
     vec3 p = abs(fract(vec3(c.x,c.x,c.x) + vec3(0.0,2.0/3.0,1.0/3.0)) * 6.0 - 3.0);
     vec3 rgb = clamp(p - 1.0, 0.0, 1.0);
     return c.z * mix(vec3(1.0), rgb, c.y);
+}
+
+// RGB->HSV（h:[0,1), s,v:[0,1]）
+vec3 rgb2hsv(vec3 c){
+    float cmax = max(c.r, max(c.g, c.b));
+    float cmin = min(c.r, min(c.g, c.b));
+    float d = cmax - cmin;
+    float h = 0.0;
+    if (d > 1e-6) {
+        if (cmax == c.r) {
+            h = mod((c.g - c.b) / d, 6.0);
+        } else if (cmax == c.g) {
+            h = (c.b - c.r) / d + 2.0;
+        } else {
+            h = (c.r - c.g) / d + 4.0;
+        }
+        h /= 6.0;
+        if (h < 0.0) h += 1.0;
+    }
+    float s = cmax <= 0.0 ? 0.0 : d / cmax;
+    float v = cmax;
+    return vec3(h, s, v);
+}
+
+// 将颜色限制/偏向某个色相扇区（用于高熵带宽测试不同颜色）
+vec3 applyGamutSector(vec3 c, vec2 uv, float t, int mode) {
+    if (mode <= 0) return c; // Full gamut
+    // 噪声抖动，避免纯色固定
+    vec2 p = uv * uResolution;
+    float n = fract(sin(dot(floor(p), vec2(15.7, 47.3)) + t * 13.3) * 31871.1);
+    float jitter = (n - 0.5) * 0.12; // ±0.06 hue 抖动
+
+    if (mode == 7) {
+        // 灰度：直接返回灰阶（保持亮度高以占带宽）
+        float g = clamp((c.r + c.g + c.b) / 3.0, 0.0, 1.0);
+        return vec3(g);
+    }
+
+    float targetH = 0.0;
+    if (mode == 1) targetH = 0.0;            // R
+    else if (mode == 2) targetH = 1.0/3.0;   // G
+    else if (mode == 3) targetH = 2.0/3.0;   // B
+    else if (mode == 4) targetH = 0.5;       // C (between G and B)
+    else if (mode == 5) targetH = 5.0/6.0;   // M
+    else if (mode == 6) targetH = 1.0/6.0;   // Y
+    else return c;
+
+    vec3 hsv = rgb2hsv(c);
+    hsv.x = fract(targetH + jitter);
+    hsv.y = max(hsv.y, 0.85); // 高饱和度以覆盖位深
+    return hsv2rgb(hsv);
 }
 
 // 高熵颜色场（避免大块重复色）
@@ -134,9 +186,10 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
         float b = sin(uv.x*163.0 + t*2.83) * sin(uv.y*127.0 - t*1.29) * 0.5 + 0.5;
         c = vec3(r,g,b);
     } else if (variation == 10) {
-        // HSV 色轮（平滑）：角度->色相，半径->亮度
+        // HSV 色轮（平滑，随时间旋转）：角度->色相，半径->亮度
         vec2 d = (uv - 0.5) * 2.0;
-        float h = fract((atan(d.y,d.x) / 6.2831853) + 1.0);
+        float rot = t * 0.08; // 缓慢旋转速度（转/秒的比例）
+        float h = fract((atan(d.y,d.x) / 6.2831853) + 1.0 + rot);
         float v2 = clamp(length(d), 0.0, 1.0);
         c = hsv2rgb(vec3(h, 0.9, 1.0 - v2*0.2));
     } else if (variation == 11) {
@@ -167,6 +220,8 @@ vec3 generateComplexColor(vec2 uv, float time, int variation) {
         c = vec3(r,g,b);
     }
 
+    // 颜色扇区限制（动态测试不同色域/颜色）
+    c = applyGamutSector(c, uv, t, uGamutMode);
     // 10-bit 量化，降低压缩可预测性同时确保位深覆盖
     c = vec3(q10(c.r), q10(c.g), q10(c.b));
     return c;
@@ -580,14 +635,32 @@ bool MonitorTest::initializeWindow() {
     
     // 获取主显示器
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-    
-    windowWidth = mode->width;
-    windowHeight = mode->height;
-    
+    const GLFWvidmode* current = glfwGetVideoMode(monitor);
+
+    // 选取当前分辨率下的最高刷新率，避免固定为 60Hz 的情况
+    int bestRefresh = current ? current->refreshRate : 60;
+    int bestW = current ? current->width : 1920;
+    int bestH = current ? current->height : 1080;
+    int count = 0;
+    const GLFWvidmode* modes = glfwGetVideoModes(monitor, &count);
+    if (modes && count > 0 && current) {
+        for (int i = 0; i < count; ++i) {
+            if (modes[i].width == current->width && modes[i].height == current->height) {
+                if (modes[i].refreshRate > bestRefresh) bestRefresh = modes[i].refreshRate;
+            }
+        }
+    }
+
+    windowWidth = bestW;
+    windowHeight = bestH;
+
+    preferredRefreshHz = bestRefresh;
     std::cout << tr("检测到显示器分辨率: ", "Detected resolution: ")
-              << windowWidth << "x" << windowHeight << " @" << mode->refreshRate << "Hz" << std::endl;
-    
+              << windowWidth << "x" << windowHeight << " @" << preferredRefreshHz << "Hz" << std::endl;
+
+    // 提示首选刷新率（独占全屏时有效）
+    glfwWindowHint(GLFW_REFRESH_RATE, bestRefresh);
+
     // 创建全屏窗口
     window = glfwCreateWindow(windowWidth, windowHeight, "Display Hardware Test", monitor, nullptr);
     
@@ -747,7 +820,19 @@ void MonitorTest::renderStatusOverlay() {
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);
     std::string refresh = mode ? (std::string(tr("刷新率: ", "Refresh: ")) + std::to_string(mode->refreshRate) + " Hz")
                                : std::string(tr("刷新率: 未知", "Refresh: Unknown"));
-    leftLines.push_back({refresh, cr, cg, cb, true});
+    leftLines.push_back({refresh, cr, cg, cb, false});
+    // 显示后端/平台信息与首选刷新率
+#ifdef _WIN32
+    std::string backend = "Backend: Win32";
+#else
+    const char* wld = std::getenv("WAYLAND_DISPLAY");
+    const char* x11d = std::getenv("DISPLAY");
+    std::string backend = wld ? "Backend: Wayland" : (x11d ? "Backend: X11" : "Backend: Unknown");
+#endif
+    if (preferredRefreshHz > 0) {
+        backend += std::string(" | ") + tr("请求刷新率", "Requested Hz") + ": " + std::to_string(preferredRefreshHz);
+    }
+    leftLines.push_back({backend, cr, cg, cb, true});
 
     leftLines.push_back({tr("实时测试信息", "Runtime"), 1.00f, 0.75f, 0.30f, false});
     std::string modeStr;
@@ -755,6 +840,7 @@ void MonitorTest::renderStatusOverlay() {
         case TestMode::FIXED_FPS:       modeStr = tr("固定帧率", "Fixed FPS"); break;
         case TestMode::JITTER_FPS:      modeStr = tr("抖动模式", "Jitter FPS"); break;
         case TestMode::OSCILLATION_FPS: modeStr = tr("震荡模式", "Oscillation FPS"); break;
+        case TestMode::UNLIMITED_FPS:   modeStr = tr("无限制帧率", "Unlimited FPS"); break;
     }
     std::ostringstream oss;
     oss << "FPS: " << static_cast<int>(currentFps);
@@ -764,7 +850,7 @@ void MonitorTest::renderStatusOverlay() {
     ft << std::fixed << std::setprecision(2)
        << (language == Language::ZH ? "帧时间: " : "Frame time: ")
        << frameTimeMs << " ms";
-    if (!(useDynamicFrameRange && !config.vsyncEnabled)) {
+    if (!((useDynamicFrameRange && !config.vsyncEnabled) || (config.mode == TestMode::UNLIMITED_FPS))) {
         ft << (language == Language::ZH ? "  (目标: " : "  (Target: ")
            << (targetFrameTime * 1000.0) << " ms)";
     }
@@ -773,10 +859,19 @@ void MonitorTest::renderStatusOverlay() {
     if (config.vsyncEnabled) {
         pacing = (language==Language::ZH?"帧率策略: 垂直同步":"Pacing: VSync");
     } else {
-        pacing = useDynamicFrameRange ? (language==Language::ZH?"帧率策略: 动态范围":"Pacing: Range")
-                                      : (language==Language::ZH?"帧率策略: 固定":"Pacing: Fixed");
+        if (config.mode == TestMode::UNLIMITED_FPS) {
+            pacing = (language==Language::ZH?"帧率策略: 无限制":"Pacing: Unlimited");
+        } else {
+            pacing = useDynamicFrameRange ? (language==Language::ZH?"帧率策略: 动态范围":"Pacing: Range")
+                                          : (language==Language::ZH?"帧率策略: 固定":"Pacing: Fixed");
+        }
     }
     leftLines.push_back({pacing, cr, cg, cb, false});
+    if (!config.vsyncEnabled && config.mode != TestMode::UNLIMITED_FPS && useDynamicFrameRange) {
+        std::string strat = dynamicOscillation ? tr("范围策略: 震荡","Range: Oscillation")
+                                               : tr("范围策略: 抖动","Range: Jitter");
+        leftLines.push_back({strat, cr, cg, cb, false});
+    }
     std::string groupStr;
     if (config.category == Category::STATIC_GROUP) groupStr = tr("静态图样", "Static");
     else if (config.category == Category::DYNAMIC_GROUP) groupStr = tr("动态高熵", "High-Entropy");
@@ -860,6 +955,22 @@ void MonitorTest::renderStatusOverlay() {
     leftLines.push_back({std::string(tr("垂直同步: ", "VSync: ")) + onOff(config.vsyncEnabled), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("目标帧率: ", "Target FPS: ")) + std::to_string(config.targetFps), cr, cg, cb, false});
     leftLines.push_back({std::string(tr("范围: ", "Range: ")) + std::to_string(config.minFps) + "~" + std::to_string(config.maxFps), cr, cg, cb, config.isPaused});
+    {
+        auto gamutName = [&](int m)->std::string{
+            switch(m){
+                case 0: return language==Language::ZH?"全色域":"Full";
+                case 1: return language==Language::ZH?"红域":"Red";
+                case 2: return language==Language::ZH?"绿域":"Green";
+                case 3: return language==Language::ZH?"蓝域":"Blue";
+                case 4: return language==Language::ZH?"青域":"Cyan";
+                case 5: return language==Language::ZH?"品红域":"Magenta";
+                case 6: return language==Language::ZH?"黄域":"Yellow";
+                case 7: return language==Language::ZH?"灰阶":"Gray";
+            }
+            return language==Language::ZH?"全色域":"Full";
+        };
+        leftLines.push_back({std::string(tr("色域: ", "Gamut: ")) + gamutName(config.gamutMode), cr, cg, cb, false});
+    }
     if (config.isPaused) leftLines.push_back({tr("状态: 已暂停", "Status: Paused"), 1.0f, 0.2f, 0.2f, false});
     }
 
@@ -896,9 +1007,12 @@ void MonitorTest::renderStatusOverlay() {
         items.push_back({"V", tr("垂直同步 开/关", "VSync On/Off")});
     items.push_back({"F1", tr("精简显示 开/关", "Minimal overlay On/Off")});
     items.push_back({"F2", tr("帧率策略 固定/动态范围", "Pacing Fixed/Range")});
+    items.push_back({"F3", tr("动态策略 抖动/震荡", "Range Jitter/Osc")});
+    items.push_back({"F4", tr("无限制帧率 开/关", "Unlimited FPS On/Off")});
     items.push_back({"F12", tr("一键极限模式", "Extreme mode toggle")});
     items.push_back({"F5/F6", tr("动态最小帧 -/+", "Range min -/+" )});
     items.push_back({"F7/F8", tr("动态最大帧 -/+", "Range max -/+" )});
+    items.push_back({"F9/F10", tr("色域 上一/下一", "Gamut prev/next")});
         items.push_back({"L", "Toggle language (ZH/EN)"});
 
         float col1W = 0.0f; float col2W = 0.0f; float rightTotalH = 0.0f;
@@ -975,18 +1089,16 @@ void MonitorTest::run() {
             render();
         }
         
-        // 帧率控制
-        if (config.mode == TestMode::FIXED_FPS) {
+        // 帧率控制：当关闭 VSync 时，按目标帧时间节流；无限制模式不节流
+        {
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<double>(now - lastFrameTime).count();
-            
-            if (elapsed < targetFrameTime) {
-                double sleepTime = targetFrameTime - elapsed;
-                std::this_thread::sleep_for(std::chrono::duration<double>(sleepTime));
+            if (!config.vsyncEnabled && config.mode != TestMode::UNLIMITED_FPS) {
+                if (elapsed < targetFrameTime) {
+                    double sleepTime = targetFrameTime - elapsed;
+                    std::this_thread::sleep_for(std::chrono::duration<double>(sleepTime));
+                }
             }
-            
-            lastFrameTime = std::chrono::high_resolution_clock::now();
-        } else {
             lastFrameTime = std::chrono::high_resolution_clock::now();
         }
         
@@ -1027,6 +1139,7 @@ void MonitorTest::render() {
     // 动态复杂内容的子变体（用于 generateComplexColor）
     int dynVar = (cat == 1) ? sub : 0;
     shader->setInt("uColorVariation", dynVar);
+    shader->setInt("uGamutMode", (cat == 1) ? config.gamutMode : 0);
     // 无参数传递（已去掉可调参数）
     
     // 绘制全屏四边形
@@ -1045,10 +1158,14 @@ void MonitorTest::handleInput() {
 }
 
 void MonitorTest::updateFrameRate() {
-    if (!config.vsyncEnabled) {
-        config.mode = useDynamicFrameRange ? TestMode::JITTER_FPS : TestMode::FIXED_FPS;
-    } else {
-        config.mode = TestMode::FIXED_FPS;
+    // 在关闭 VSync 的情况下，根据“动态范围”切换固定/随机帧率
+    // 当处于“无限制帧率”模式时不改写模式
+    if (!config.vsyncEnabled && config.mode != TestMode::UNLIMITED_FPS) {
+        if (useDynamicFrameRange) {
+            config.mode = dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
+        } else {
+            config.mode = TestMode::FIXED_FPS;
+        }
     }
     double targetFps = calculateTargetFps();
     targetFrameTime = 1.0 / targetFps;
@@ -1073,6 +1190,11 @@ double MonitorTest::calculateTargetFps() {
             double center = config.minFps + range;
             return center + range * std::sin(currentTime * 0.5);
         }
+
+        case TestMode::UNLIMITED_FPS: {
+            // 不限制帧率：返回值不会被用于节流
+            return config.targetFps;
+        }
     }
     
     return config.targetFps;
@@ -1090,6 +1212,7 @@ void MonitorTest::reportFps() {
             case TestMode::FIXED_FPS: modeStr = tr("固定帧率", "Fixed FPS"); break;
             case TestMode::JITTER_FPS: modeStr = tr("抖动模式", "Jitter FPS"); break;
             case TestMode::OSCILLATION_FPS: modeStr = tr("震荡模式", "Oscillation FPS"); break;
+            case TestMode::UNLIMITED_FPS: modeStr = tr("无限制帧率", "Unlimited FPS"); break;
         }
         
         auto staticName = [&](int idx)->std::string {
@@ -1264,12 +1387,48 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
                 test->useDynamicFrameRange = !test->useDynamicFrameRange;
                 break;
             }
+            case GLFW_KEY_F3: {
+                test->dynamicOscillation = !test->dynamicOscillation;
+                if (!test->config.vsyncEnabled && test->useDynamicFrameRange && test->config.mode != TestMode::UNLIMITED_FPS) {
+                    // 立即切换当前动态策略
+                    test->config.mode = test->dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
+                }
+                std::cout << (test->language==Language::ZH
+                              ? (test->dynamicOscillation?"动态策略: 震荡":"动态策略: 抖动")
+                              : (test->dynamicOscillation?"Range: Oscillation":"Range: Jitter"))
+                          << std::endl;
+                break;
+            }
+            case GLFW_KEY_F4: {
+                if (test->config.mode == TestMode::UNLIMITED_FPS) {
+                    // 关闭无限制：恢复到固定/动态范围策略（不改变 VSync 开/关）
+                    if (!test->config.vsyncEnabled) {
+                        if (test->useDynamicFrameRange) {
+                            test->config.mode = test->dynamicOscillation ? TestMode::OSCILLATION_FPS : TestMode::JITTER_FPS;
+                        } else {
+                            test->config.mode = TestMode::FIXED_FPS;
+                        }
+                    } else {
+                        test->config.mode = TestMode::FIXED_FPS;
+                    }
+                } else {
+                    // 开启无限制：需要关闭 VSync
+                    test->config.vsyncEnabled = false; glfwSwapInterval(0);
+                    test->config.mode = TestMode::UNLIMITED_FPS;
+                }
+                std::cout << (test->language==Language::ZH
+                              ? (test->config.mode==TestMode::UNLIMITED_FPS?"无限制帧率: 开":"无限制帧率: 关")
+                              : (test->config.mode==TestMode::UNLIMITED_FPS?"Unlimited FPS: On":"Unlimited FPS: Off"))
+                          << std::endl;
+                break;
+            }
             case GLFW_KEY_F12: {
                 test->extremeMode = !test->extremeMode;
                 if (test->extremeMode) {
                     test->config.vsyncEnabled = false; glfwSwapInterval(0);
                     test->minimalOverlay = true;
-                    test->useDynamicFrameRange = true;
+                    test->useDynamicFrameRange = false; // 极限模式使用“无限制帧率”
+                    test->config.mode = TestMode::UNLIMITED_FPS;
                     test->config.category = Category::DYNAMIC_GROUP;
                     test->config.dynamicMode = 1; // 多尺度哈希
                     test->config.minFps = 30; test->config.maxFps = 240;
@@ -1293,6 +1452,16 @@ void MonitorTest::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int
             }
             case GLFW_KEY_F8: {
                 if (test->config.maxFps < 360) test->config.maxFps += 1;
+                break;
+            }
+            case GLFW_KEY_F9: {
+                test->config.gamutMode = (test->config.gamutMode + 8 - 1) % 8;
+                std::cout << (test->language==Language::ZH?"色域: ":"Gamut: ") << test->config.gamutMode << std::endl;
+                break;
+            }
+            case GLFW_KEY_F10: {
+                test->config.gamutMode = (test->config.gamutMode + 1) % 8;
+                std::cout << (test->language==Language::ZH?"色域: ":"Gamut: ") << test->config.gamutMode << std::endl;
                 break;
             }
 
@@ -1337,6 +1506,8 @@ void MonitorTest::printControls() const {
     std::cout << "F1     - " << (language==Language::ZH?"精简显示 开/关":"Minimal overlay On/Off") << std::endl;
     std::cout << "F2     - " << (language==Language::ZH?"帧率策略 固定/动态":"Pacing Fixed/Range") << std::endl;
     std::cout << "F3     - " << (language==Language::ZH?"动态策略 抖动/震荡":"Range Jitter/Osc") << std::endl;
+    std::cout << "F4     - " << (language==Language::ZH?"无限制帧率 开/关":"Unlimited FPS On/Off") << std::endl;
+    std::cout << "F9/F10 - " << (language==Language::ZH?"色域 上一/下一":"Gamut prev/next") << std::endl;
     std::cout << "F12    - " << (language==Language::ZH?"一键极限模式":"Extreme mode toggle") << std::endl;
     std::cout << "L      - Toggle language (ZH/EN)" << std::endl;
     std::cout << "===============\n" << std::endl;
